@@ -4,7 +4,7 @@ import numpy as np
 # Compiled extension module files must be located in same directory 
 import diffusion
 
-def steady_state_diffusion_2D(C0,dirichlet_bc,dx=1,dy=1,tol=1e-6,conv_mask=None):
+def steady_state_diffusion_2D(C0,dirichlet_bc,dx=1,dy=1,tol=1e-6,omega=1.0,conv_mask=None):
     """
     This function computes the steady-state solution to the 2D diffusion equation on a rectangular grid: 
     
@@ -16,6 +16,7 @@ def steady_state_diffusion_2D(C0,dirichlet_bc,dx=1,dy=1,tol=1e-6,conv_mask=None)
     param: dx: grid spacing in x-direction (i.e., between columns)
     param: dy: grid spacing in y-direction (i.e., between rows)
     param: tol: tolerance used to assess convergence
+    param: omega: value of over-relaxation parameter used to accelerate convergence (should be between 1.0 and 1.9). 
     param: conv_mask: boolean array denoting elements to use when assessing convergence. 
     
     returns: C: solution to steady state diffusion equation subject to specified boundary conditions.
@@ -49,7 +50,7 @@ def steady_state_diffusion_2D(C0,dirichlet_bc,dx=1,dy=1,tol=1e-6,conv_mask=None)
     
     # Call wrapped Fortran function created with F2PY
     # (much faster than pure Python implementation) 
-    C = diffusion.diffusion(dx,dy,C0,bc_coords,bc_values,conv_coords,tol)
+    C = diffusion.diffusion(dx,dy,C0,bc_coords,bc_values,conv_coords,tol,omega)
     
     return(C)
 
