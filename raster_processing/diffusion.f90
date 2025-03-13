@@ -17,7 +17,7 @@ CONTAINS
         INTEGER, DIMENSION(2,Nconv), INTENT(IN) :: conv_coords
 
         REAL(KIND = 8), DIMENSION(Ny,Nx) :: C, C_prev
-        LOGICAL, DIMENSION(Ny,Nx) :: bc_cell
+        INTEGER, DIMENSION(Ny,Nx) :: bc_cell
         INTEGER, DIMENSION(2,2*(Nx+Ny)) :: edge_bc_coords
         REAL(KIND = 8), DIMENSION(2*(Nx+Ny)) :: edge_bc_values
         REAL(KIND = 8), DIMENSION(Nconv) :: diff
@@ -32,7 +32,7 @@ CONTAINS
         
         ! Set initial conditions
         C = C0
-        bc_cell = FALSE
+        bc_cell = 0
         num_edge_bc_cells = 0
         diff = 0.0
         max_diff = tol + 1
