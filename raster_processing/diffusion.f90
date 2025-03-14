@@ -5,7 +5,7 @@ CONTAINS
     FUNCTION steady_state_diffusion(Nx,Ny,dx,dy,C0,Nbc,bc_coords,bc_values,Nconv,conv_coords,tol,omega) RESULT(C)
     
         ! This function computes the steady-state solution to the 2-D diffusion equation
-        ! using the successive over-relaxation (SOR) method. Sources and sinks are specified 
+        ! using the successive over-relaxation (SOR) method. Known points are specified 
         ! based on dirichlet boundary condition coordinates and values supplied by the user. 
         ! Edges of the computational domain are subject to a no-flux boundary condition.  
 

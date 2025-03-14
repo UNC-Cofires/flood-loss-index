@@ -12,7 +12,7 @@ def steady_state_diffusion_2D(C0,dirichlet_bc,dx=1,dy=1,tol=1e-6,omega=1.0,conv_
     
     param: C0: initial guess for C (ny x nx array)
     param: dirichlet_bc: dirichlet boundary conditions (ny x nx array). Populated elements denote 
-                         fixed values of C (i.e., sources/sinks). Non-source or sink elements should be NaN valued. 
+                         fixed values of C. Non-fixed (i.e., unknown) elements should be NaN valued. 
     param: dx: grid spacing in x-direction (i.e., between columns)
     param: dy: grid spacing in y-direction (i.e., between rows)
     param: tol: tolerance used to assess convergence
