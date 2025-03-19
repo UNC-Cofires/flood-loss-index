@@ -237,8 +237,8 @@ floodplain_500y = pd.concat(floodplain_500y)
 bbox = study_area.buffer(1000).total_bounds
 
 # Specify cell size of rasters
-cellsize = 90
-upsize = 3*cellsize # Lowest resolution we anticipate upscaling to. Should be multiple of cellsize
+cellsize = 30
+upsize = 6*cellsize # Lowest resolution we anticipate upscaling to. Should be multiple of cellsize
 
 # Round down to nearest 10m cell
 bbox = (bbox // upsize)*upsize
