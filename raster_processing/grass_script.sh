@@ -11,15 +11,16 @@ g.region raster=elev -p
 r.in.gdal input="${RPU}_fdr.tif" output=fdr
 r.in.gdal input="${RPU}_wb.tif" output=wb
 
-# Set null value in waterbody rasters to zero 
-# r.null map=waterbodies null=0
-
 # Calculate distance to and height above waterbodies 
 r.stream.distance stream_rast=wb direction=fdr elevation=elev method=downstream distance=wb_dist difference=wb_diff
 
 # Convert to integer raster to save disk space
 r.mapcalc "wb_dist = int(wb_dist)" --overwrite
 r.mapcalc "wb_diff = int(wb_diff)" --overwrite
+
+# Specify nodata value
+r.null map=wb_dist null=-999999
+r.null map=wb_diff null=-999999
 
 # Save results
 r.out.gdal input=wb_dist output="${RPU}_flowpath_dist_m.tif" --overwrite
