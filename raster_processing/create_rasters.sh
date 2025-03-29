@@ -8,7 +8,7 @@
 #SBATCH --mail-type=all
 #SBATCH --job-name=create_rasters
 #SBATCH --mail-user=kieranf@email.unc.edu
-#SBATCH --array=1
+#SBATCH --array=10
 
 # Determine raster processing unit (RPU) of interest based on task_id
 RPU="$(sed -n ${SLURM_ARRAY_TASK_ID}p /proj/characklab/projects/kieranf/flood_damage_index/analysis/CONUS_RPU_list.txt)"

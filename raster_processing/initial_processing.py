@@ -79,6 +79,24 @@ def write_raster(arr,filepath,transform,crs,nodata_value=np.nan):
         
     return None
 
+def get_neighbors(arr,corners=True):
+    """
+    param: arr: 2D boolean array with points of interest labeled as "True"
+    param: corners: if true, count diagonally adjacent points as neighbors (as opposed to just up/down/left/right)
+    returns: neighbor_mask: boolean array denoting elements that border a point of interest. 
+    """
+    padded = np.pad(arr,pad_width=1,mode='constant',constant_values=False)
+    
+    direct_mask = (padded[:-2, 1:-1] | padded[2:, 1:-1] | padded[1:-1, :-2] | padded[1:-1, 2:])
+    corner_mask = (padded[:-2, :-2] | padded[:-2, 2:] | padded[2:, 2:] | padded[2:, :-2])
+    
+    if corners:
+        neighbor_mask = (direct_mask | corner_mask)
+    else:
+        neighbor_mask = direct_mask
+    
+    return neighbor_mask
+
 ### *** INITIAL SETUP *** ###
 
 # Specify raster processing unit (RPU) of interest (passed as command-line argument)
@@ -107,7 +125,7 @@ NHD_crs = 'EPSG:4269'
 ENHD_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/ENHDPlusV2/enhd_nhdplusatts.parquet'
 
 # NHDPlusV2 elevation, flow direction, and flow accumulation rasters for RPU of interest 
-elev_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NEDSnapshot/Ned{RPU}/elev_cm'
+elev_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NEDSnapshot/ned{RPU}/elev_cm'
 fdr_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NHDPlusFdrFac{RPU}/fdr'
 fac_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NHDPlusFdrFac{RPU}/fac'
 
@@ -181,6 +199,9 @@ waterbodies_raster = 1 - waterbodies_raster
 # Convert to desired data type
 waterbodies_raster = waterbodies_raster.astype(raster_dtype)
 
+# Buffer flowlines/waterbodies by one pixel in every direction
+waterbodies_raster[get_neighbors(waterbodies_raster==1)] = 1
+
 # Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
 waterbodies_raster[waterbodies_raster==0] = nodata_value
 
@@ -193,6 +214,9 @@ waterbodies2_raster = 1 - waterbodies2_raster
 
 # Convert to desired data type
 waterbodies2_raster = waterbodies2_raster.astype(raster_dtype)
+
+# Buffer flowlines/waterbodies by one pixel in every direction
+waterbodies2_raster[get_neighbors(waterbodies2_raster==1)] = 1
 
 # Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
 waterbodies2_raster[waterbodies2_raster==0] = nodata_value
@@ -208,6 +232,10 @@ with rio.open(fdr_path,'r') as src:
     fdr_raster = src.read(1)
     original_nodata_value = src.nodata
     
+# Double check that shape matches that of other rasters
+if fdr_raster.shape != elev_raster.shape:
+    raise ValueError('Shape of rasters does not match.')
+    
 fdr_raster = fdr_raster.astype(raster_dtype)
 fdr_raster[fdr_raster==original_nodata_value] = nodata_value
 
@@ -221,6 +249,10 @@ fdr_raster = reclass_raster(fdr_raster,rules)
 with rio.open(fac_path,'r') as src:
     fac_raster = src.read(1)
     original_nodata_value = src.nodata
+    
+# Double check that shape matches that of other rasters
+if fac_raster.shape != elev_raster.shape:
+    raise ValueError('Shape of rasters does not match.')
     
 fac_raster = fac_raster.astype(raster_dtype)
 fac_raster[fac_raster==original_nodata_value] = nodata_value
@@ -251,7 +283,7 @@ write_raster(waterbodies_raster,outname,transform,raster_crs,nodata_value=nodata
 outname = os.path.join(outfolder,f'{RPU}_wb2.tif')
 write_raster(waterbodies2_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
-# NHD Catchemnts
+# NHD Catchments
 outname = os.path.join(outfolder,f'{RPU}_catchments.tif')
 write_raster(catchments_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
