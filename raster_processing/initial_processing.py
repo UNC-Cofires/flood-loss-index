@@ -79,24 +79,6 @@ def write_raster(arr,filepath,transform,crs,nodata_value=np.nan):
         
     return None
 
-def get_neighbors(arr,corners=True):
-    """
-    param: arr: 2D boolean array with points of interest labeled as "True"
-    param: corners: if true, count diagonally adjacent points as neighbors (as opposed to just up/down/left/right)
-    returns: neighbor_mask: boolean array denoting elements that border a point of interest. 
-    """
-    padded = np.pad(arr,pad_width=1,mode='constant',constant_values=False)
-    
-    direct_mask = (padded[:-2, 1:-1] | padded[2:, 1:-1] | padded[1:-1, :-2] | padded[1:-1, 2:])
-    corner_mask = (padded[:-2, :-2] | padded[:-2, 2:] | padded[2:, 2:] | padded[2:, :-2])
-    
-    if corners:
-        neighbor_mask = (direct_mask | corner_mask)
-    else:
-        neighbor_mask = direct_mask
-    
-    return neighbor_mask
-
 ### *** INITIAL SETUP *** ###
 
 # Specify raster processing unit (RPU) of interest (passed as command-line argument)
@@ -104,7 +86,7 @@ RPU=sys.argv[1]
 
 # Specify path to RPU shapefile
 pwd = os.getcwd()
-RPU_path = os.path.join(pwd,'CONUS_raster_processing_units')
+RPU_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/raster_processing/CONUS_raster_processing_units'
 
 # Create output folder if it doesn't already exist 
 
@@ -124,10 +106,11 @@ NHD_crs = 'EPSG:4269'
 # Available at: https://doi.org/10.5066/P13IRYTB
 ENHD_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/ENHDPlusV2/enhd_nhdplusatts.parquet'
 
-# NHDPlusV2 elevation, flow direction, and flow accumulation rasters for RPU of interest 
-elev_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NEDSnapshot/ned{RPU}/elev_cm'
-fdr_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NHDPlusFdrFac{RPU}/fdr'
-fac_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/TestRasters/input/NHDPlusFdrFac{RPU}/fac'
+# NHDPlusV2 elevation, flow direction, and flow accumulation rasters for RPU of interest
+NHD_raster_dir = '/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/NHDPlusRasters'
+elev_path = os.path.join(NHD_raster_dir,f'{RPU}/{RPU}_elev_cm.tif')
+fdr_path = os.path.join(NHD_raster_dir,f'{RPU}/{RPU}_fdr.tif')
+fac_path = os.path.join(NHD_raster_dir,f'{RPU}/{RPU}_fac.tif')
 
 ### *** LOAD DATA SOURCES *** ###
 
@@ -148,6 +131,9 @@ with rio.open(elev_path,'r') as src:
     out_shape = src.shape
     dx,dy = src.res
     original_nodata_value = src.nodata
+    
+# Print EPSG code
+print('EPSG:',raster_crs.to_epsg())
 
 # Update nodata value
 elev_raster = elev_raster.astype(raster_dtype)
@@ -172,10 +158,6 @@ nhd_coastal_areas = nhd_areas[nhd_areas['COMID'].isin(nhd_coastal_area_comids)]
 nhd_areas = nhd_areas[nhd_areas['COMID'].isin(flowlines['WBAREACOMI'])]
 nhd_waterbodies = nhd_waterbodies[nhd_waterbodies['COMID'].isin(flowlines['WBAREACOMI'])]
 
-## Read in ENHD flowtable
-flowtable = pd.read_parquet(ENHD_path)
-flowtable[['comid','tocomid']] = flowtable[['comid','tocomid']].astype(int)
-
 ### *** STUDY AREA RASTER *** ###
 
 study_area_raster = rasterize_vector(study_area,out_shape,transform,burn_value=1,fill_value=nodata_value,dtype=raster_dtype)
@@ -199,9 +181,6 @@ waterbodies_raster = 1 - waterbodies_raster
 # Convert to desired data type
 waterbodies_raster = waterbodies_raster.astype(raster_dtype)
 
-# Buffer flowlines/waterbodies by one pixel in every direction
-waterbodies_raster[get_neighbors(waterbodies_raster==1)] = 1
-
 # Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
 waterbodies_raster[waterbodies_raster==0] = nodata_value
 
@@ -214,9 +193,6 @@ waterbodies2_raster = 1 - waterbodies2_raster
 
 # Convert to desired data type
 waterbodies2_raster = waterbodies2_raster.astype(raster_dtype)
-
-# Buffer flowlines/waterbodies by one pixel in every direction
-waterbodies2_raster[get_neighbors(waterbodies2_raster==1)] = 1
 
 # Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
 waterbodies2_raster[waterbodies2_raster==0] = nodata_value
@@ -275,7 +251,7 @@ write_raster(fdr_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 outname = os.path.join(outfolder,f'{RPU}_fac.tif')
 write_raster(fac_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
-# Waterbodies 
+# Waterbodies
 outname = os.path.join(outfolder,f'{RPU}_wb.tif')
 write_raster(waterbodies_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
@@ -286,4 +262,3 @@ write_raster(waterbodies2_raster,outname,transform,raster_crs,nodata_value=nodat
 # NHD Catchments
 outname = os.path.join(outfolder,f'{RPU}_catchments.tif')
 write_raster(catchments_raster,outname,transform,raster_crs,nodata_value=nodata_value)
-
