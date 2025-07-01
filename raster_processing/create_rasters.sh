@@ -21,11 +21,15 @@ export PYTHONWARNINGS="ignore"
 # Initial processing of NHD rasters
 conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
 python3.12 initial_processing.py $RPU
-
-# Run GRASS GIS script to calculate distance to and height above waterbodies
 conda deactivate
+
+# Run GRASS GIS script to calculate slope and terrain forms from DEM
 apptainer exec --bind /proj/characklab/projects/kieranf/flood_damage_index/ /proj/characklab/projects/kieranf/GRASS/grass-gis_releasebranch_8_4-debian.sif grass --tmp-project EPSG:5070 --exec bash $PWD/grass_script.sh $RPU
 
+# Calculate HAND and stream distance using custom functions
+conda activate /proj/characklab/projects/kieranf/flood_damage_index/f2py_env
+python3.11 flowpath_calculations.py $RPU
+conda deactivate
 
 
 

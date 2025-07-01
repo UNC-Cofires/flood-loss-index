@@ -7,21 +7,21 @@ cd "/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/${RPU}"
 r.in.gdal input="${RPU}_elev_cm.tif" output=elev
 g.region raster=elev -p
 
-# Read in flow direction and waterbody rasters 
-r.in.gdal input="${RPU}_fdr.tif" output=fdr
-r.in.gdal input="${RPU}_wb.tif" output=wb
+# Convert elevation from cm to m
+r.mapcalc "elev = float(elev)/100.0" --overwrite
 
-# Calculate distance to and height above waterbodies 
-r.stream.distance stream_rast=wb direction=fdr elevation=elev method=downstream distance=wb_dist difference=wb_diff
+# Calculate terrain forms and slope from DEM
+r.geomorphon -m elevation=elev forms=terrainforms search=1000.0
+r.slope.aspect elevation=elev slope=slope format=percent
 
-# Convert to integer raster to save disk space
-r.mapcalc "wb_dist = int(wb_dist)" --overwrite
-r.mapcalc "wb_diff = int(wb_diff)" --overwrite
+# Convert to integer data type to save disk space
+r.mapcalc "slope = int(10*slope)" --overwrite
 
 # Specify nodata value
-r.null map=wb_dist null=-999999
-r.null map=wb_diff null=-999999
+r.null map=slope null=-999999 setnull=-999999
+r.null map=terrainforms null=-999999 setnull=-999999
 
 # Save results
-r.out.gdal input=wb_dist output="${RPU}_flowpath_dist_m.tif" --overwrite
-r.out.gdal input=wb_diff output="${RPU}_flowpath_diff_cm.tif" --overwrite
+r.out.gdal input=terrainforms output="${RPU}_terrain_forms.tif" nodata=-999999 type=Int32 --overwrite
+r.out.gdal input=slope output="${RPU}_slope_x1000.tif" nodata=-999999 type=Int32 --overwrite
+
