@@ -14,14 +14,20 @@ r.mapcalc "elev = float(elev)/100.0" --overwrite
 r.geomorphon -m elevation=elev forms=terrainforms search=1000.0
 r.slope.aspect elevation=elev slope=slope format=percent
 
-# Convert to integer data type to save disk space
+# Calculate topographic position index (TPI)
+r.neighbors -c input=elev output=neighborhood_elev size=9 method=average
+r.mapcalc "tpi = elev - neighborhood_elev"
+
+# Convert to integer data types to save disk space
 r.mapcalc "slope = int(10*slope)" --overwrite
+r.mapcalc "tpi = int(100*tpi)" --overwrite
 
 # Specify nodata value
 r.null map=slope null=-999999 setnull=-999999
 r.null map=terrainforms null=-999999 setnull=-999999
+r.null map=tpi null=-999999 setnull=-999999
 
 # Save results
 r.out.gdal input=terrainforms output="${RPU}_terrain_forms.tif" nodata=-999999 type=Int32 --overwrite
 r.out.gdal input=slope output="${RPU}_slope_x1000.tif" nodata=-999999 type=Int32 --overwrite
-
+r.out.gdal input=tpi output="${RPU}_tpi_cm.tif" nodata=-999999 type=Int32 --overwrite
