@@ -31,6 +31,11 @@ conda activate /proj/characklab/projects/kieranf/flood_damage_index/f2py_env
 python3.11 flowpath_calculations.py $RPU
 conda deactivate
 
+# Sample rasters at structure points
+conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
+python3.12 sample_raster_data.py $RPU
+conda deactivate
+
 
 
 

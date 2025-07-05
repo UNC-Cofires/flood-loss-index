@@ -260,5 +260,5 @@ outname = os.path.join(outfolder,f'{RPU}_wb2.tif')
 write_raster(waterbodies2_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # NHD Catchments
-outname = os.path.join(outfolder,f'{RPU}_catchments.tif')
+outname = os.path.join(outfolder,f'{RPU}_nhd_catchment_comid.tif')
 write_raster(catchments_raster,outname,transform,raster_crs,nodata_value=nodata_value)

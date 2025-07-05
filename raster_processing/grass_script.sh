@@ -28,6 +28,6 @@ r.null map=terrainforms null=-999999 setnull=-999999
 r.null map=tpi null=-999999 setnull=-999999
 
 # Save results
-r.out.gdal input=terrainforms output="${RPU}_terrain_forms.tif" nodata=-999999 type=Int32 --overwrite
+r.out.gdal input=terrainforms output="${RPU}_geomorphon.tif" nodata=-999999 type=Int32 --overwrite
 r.out.gdal input=slope output="${RPU}_slope_x1000.tif" nodata=-999999 type=Int32 --overwrite
 r.out.gdal input=tpi output="${RPU}_tpi_cm.tif" nodata=-999999 type=Int32 --overwrite
