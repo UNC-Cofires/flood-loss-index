@@ -28,7 +28,7 @@ outfolder = f'/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/
 
 # Specify path to raster data files
 raster_variables = ['nhd_catchment_comid','elev_cm','dist_wb_m','hand_wb_cm','slope_x1000','geomorphon','tpi_cm','fac']
-raster_paths = [os.path.join(outfolder,f'{RPU}_{var}.tif') for var in raster_variables.keys()]
+raster_paths = [os.path.join(outfolder,f'{RPU}_{var}.tif') for var in raster_variables]
 
 # Specify coordinate reference system
 crs = 'EPSG:5070'
