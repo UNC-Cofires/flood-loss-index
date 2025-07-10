@@ -6,7 +6,7 @@
 #SBATCH --mem=64g
 #SBATCH -t 1-00:00:00
 #SBATCH --mail-type=all
-#SBATCH --job-name=agg_rainfall
+#SBATCH --job-name=create_weightmaps
 #SBATCH --mail-user=kieranf@email.unc.edu
 #SBATCH --array=4-9
 
@@ -21,3 +21,4 @@ export PYTHONWARNINGS="ignore"
 # Determine grid cell weights for each catchment
 conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
 python3.12 create_weightmaps.py $RPU
+
