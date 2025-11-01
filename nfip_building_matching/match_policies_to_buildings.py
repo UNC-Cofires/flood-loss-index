@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import os
 
@@ -153,7 +154,7 @@ state = state_list[state_idx]
 
 # Set up folder for output
 # Create output folder if it doesn't already exist 
-outfolder = os.path.join(pwd,'potential_matches',state,'claims')
+outfolder = os.path.join(pwd,'potential_matches',state,'policies')
 if not os.path.exists(outfolder):
     os.makedirs(outfolder,exist_ok=True)
 
@@ -163,43 +164,43 @@ if not os.path.exists(outfolder):
 buildings_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NSI/{state}/{state}_structure_info.parquet'
 buildings = pd.read_parquet(buildings_path)
 
-# OpenFEMA NFIP claims data
-claims_path = '/proj/characklab/projects/kieranf/OpenFEMA/FimaNfipClaims.parquet'
-usecols = ['id','state','latitude','longitude','censusBlockGroupFips','reportedZipCode','ratedFloodZone','occupancyType']
-filters = [('state','=',state)]
-claims = pd.read_parquet(claims_path,columns=usecols,filters=filters)
+# OpenFEMA NFIP policy data
+policies_path = '/proj/characklab/projects/kieranf/OpenFEMA/FimaNfipPolicies.parquet'
+usecols = ['id','propertyState','latitude','longitude','censusBlockGroupFips','reportedZipCode','ratedFloodZone','occupancyType']
+filters = [('propertyState','=',state)]
+policies = pd.read_parquet(policies_path,columns=usecols,filters=filters)
 
 ### *** FORMAT AND CLEAN DATA *** ###
 
 # Drop records with missing latitude and longitude
 # (will keep track of their ids in case we want to do something with them later)
-missing_coordinate_mask = claims[['latitude','longitude']].isna().any(axis=1)
-claims_missing_coordinate_ids = claims[missing_coordinate_mask]['id'].to_list()
-claims = claims[~missing_coordinate_mask]
-bad_geocode_records = pd.DataFrame({'openfema_claim_id':claims_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_type':pd.NA})
-outname = os.path.join(outfolder,f'{state}_claim_missing_latlon.parquet')
+missing_coordinate_mask = policies[['latitude','longitude']].isna().any(axis=1)
+policies_missing_coordinate_ids = policies[missing_coordinate_mask]['id'].to_list()
+policies = policies[~missing_coordinate_mask]
+bad_geocode_records = pd.DataFrame({'openfema_policy_id':policies_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_type':pd.NA})
+outname = os.path.join(outfolder,f'{state}_policy_missing_latlon.parquet')
 bad_geocode_records.to_parquet(outname)
 
-# Create columns that we'll use when assigning claims to buildings
+# Create columns that we'll use when assigning policies to buildings
 # (should already be present in building points dataset)
-claims['match_latitude'] = claims['latitude'].apply(lambda x: f'{x:.1f}')
-claims['match_longitude'] = claims['longitude'].apply(lambda x: f'{x:.1f}')
-claims['match_censusBlockGroupFips'] = claims['censusBlockGroupFips'].copy()
-claims['match_sfhaIndicator'] = claims['ratedFloodZone'].apply(is_sfha_zone)
-claims['match_coastalFloodZoneIndicator'] = claims['ratedFloodZone'].apply(is_coastal_flood_zone)
-claims['match_reportedZipCode'] = claims['reportedZipCode'].copy()
-claims['match_simplifiedOccupancyType'] = claims['occupancyType'].apply(simplify_openfema_occupancy_types)
+policies['match_latitude'] = policies['latitude'].apply(lambda x: f'{x:.1f}')
+policies['match_longitude'] = policies['longitude'].apply(lambda x: f'{x:.1f}')
+policies['match_censusBlockGroupFips'] = policies['censusBlockGroupFips'].copy()
+policies['match_sfhaIndicator'] = policies['ratedFloodZone'].apply(is_sfha_zone)
+policies['match_coastalFloodZoneIndicator'] = policies['ratedFloodZone'].apply(is_coastal_flood_zone)
+policies['match_reportedZipCode'] = policies['reportedZipCode'].copy()
+policies['match_simplifiedOccupancyType'] = policies['occupancyType'].apply(simplify_openfema_occupancy_types)
 
 # Divide data into "chunks" based on rounded lat/lon that we can use to break the 
 # computationally demanding task of identifying potential matches between records
 # and buildings into smaller pieces. This also has the added benefit of allowing us 
 # to resume processing at the previous chunk if the job times out. 
 
-claims['chunk'] = '(' + claims['match_latitude']  + ',' + claims['match_longitude'] + ')'
+policies['chunk'] = '(' + policies['match_latitude']  + ',' + policies['match_longitude'] + ')'
 buildings['chunk'] = '(' + buildings['match_latitude']  + ',' + buildings['match_longitude'] + ')'
 
 # Get list of all unique chunks
-chunks = np.sort(claims['chunk'].unique())
+chunks = np.sort(policies['chunk'].unique())
 
 # Determine which ones we've already processed in a previous job
 # (Filename will include the chunk identifier)
@@ -220,17 +221,17 @@ num_completed_chunks = len(completed_chunks)
 
 for i,chunk in enumerate(chunks_to_process):
 
-    print(f'\n\n*** {state} Claims Chunk {num_completed_chunks + i + 1} / {num_chunks}: {chunk} ***\n')
+    print(f'\n\n*** {state} Policies Chunk {num_completed_chunks + i + 1} / {num_chunks}: {chunk} ***\n')
 
-    claim_chunk_mask = (claims['chunk']==chunk)
+    policy_chunk_mask = (policies['chunk']==chunk)
     building_chunk_mask = (buildings['chunk']==chunk)
 
-    num_records = np.sum(claim_chunk_mask)
+    num_records = np.sum(policy_chunk_mask)
     num_buildings = np.sum(building_chunk_mask)
 
     # Pull out NFIP records and building points that fall inside chunk grid cell
     # Also set the index of these dataframes to be uniquely identifying
-    left = claims[claim_chunk_mask].copy().set_index('id')
+    left = policies[policy_chunk_mask].copy().set_index('id')
     right = buildings[building_chunk_mask].copy().set_index('fd_id')
 
     print(f'Number of NFIP records: {num_records}',flush=True)
@@ -289,17 +290,16 @@ for i,chunk in enumerate(chunks_to_process):
         print(f'No buildings in {state} fall within {chunk}, NFIP geocode is likely incorrect',flush=True)
 
     # Save results to file
-    chunk_info.rename(columns = {'left_index':'openfema_claim_id','right_index':'nsi_fd_id'},inplace=True)
-    outname = os.path.join(outfolder,f'{state}_claim_building_matches_{chunk}.parquet')
+    chunk_info.rename(columns = {'left_index':'openfema_policy_id','right_index':'nsi_fd_id'},inplace=True)
+    outname = os.path.join(outfolder,f'{state}_policy_building_matches_{chunk}.parquet')
     chunk_info.to_parquet(outname)
 
     with open(completed_chunks_filepath, 'a') as f:
         f.write(f'{chunk}\n')
 
-## *** CONCATENATE RESULTS *** ###
+### *** CONCATENATE RESULTS *** ###
 
 filepaths = [os.path.join(outfolder,x) for x in np.sort(os.listdir(outfolder)) if x.endswith('.parquet')]
 state_match_info = pd.concat([pd.read_parquet(f) for f in filepaths]).reset_index(drop=True)
-outname = os.path.join(pwd,'potential_matches',state,f'{state}_claim_building_matches.parquet')
+outname = os.path.join(pwd,'potential_matches',state,f'{state}_policy_building_matches.parquet')
 state_match_info.to_parquet(outname)
-
