@@ -3,12 +3,12 @@
 #SBATCH -p general
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH --mem=32g
+#SBATCH --mem=90g
 #SBATCH -t 3-00:00:00
 #SBATCH --mail-type=all
 #SBATCH --job-name=match_policies
 #SBATCH --mail-user=kieranf@email.unc.edu
-#SBATCH --array=37,25,41
+#SBATCH --array=25,37,41
 
 module purge
 module load anaconda

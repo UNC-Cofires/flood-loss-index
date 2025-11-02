@@ -8,7 +8,7 @@
 #SBATCH --mail-type=all
 #SBATCH --job-name=match_claims
 #SBATCH --mail-user=kieranf@email.unc.edu
-#SBATCH --array=37,25,41
+#SBATCH --array=25,37,41
 
 module purge
 module load anaconda

@@ -52,7 +52,7 @@ def simplify_openfema_occupancy_types(openfema_occtype):
     return simplified_occtype
 
 
-def find_matching_records(left,right,matching_cols,multiple_value_cols=[]):
+def find_matching_records(left,right,matching_cols,multiple_value_cols=[],preallocate_per_record=1500,preallocate_cutoff=3000):
     """
     This function identifies potential matches between OpenFEMA records and NSI building points. 
     
@@ -67,6 +67,8 @@ def find_matching_records(left,right,matching_cols,multiple_value_cols=[]):
     param: multiple_value_cols: list of columns in the right dataframe that are allowed to take on
                                 multiple values (e.g., a building can have multiple 
                                 censusBlockGroupFips as GEOIDs are updated with each census)
+    param: preallocate_per_record: integer denoting high estimate of number of matching buildings per NFIP record. 
+    param: preallocate_cutoff: number of records below which to switch to a safer preallocation method. 
     returns: matched_records: pandas dataframe where each row corresponds to a pair of matching records. 
     returns: unmatched_records: list of indices in left dataframe that failed to match. 
     """
@@ -87,8 +89,15 @@ def find_matching_records(left,right,matching_cols,multiple_value_cols=[]):
     left = left[~missing_mask]
     
     # Preallocate arrays to store matching information
-    left_match_indices = np.empty(len(left)*len(right),dtype=left.index.to_numpy().dtype)
-    right_match_indices = np.empty(len(left)*len(right),dtype=right.index.to_numpy().dtype)
+    if len(left) > preallocate_cutoff:
+        N_prealloc = len(left)*preallocate_per_record
+    else:
+        N_prealloc = len(left)*len(right)
+    
+    left_match_indices = np.empty(N_prealloc,dtype=left.index.to_numpy().dtype)
+    right_match_indices = np.empty(N_prealloc,dtype=right.index.to_numpy().dtype)
+    match_key_arr = np.empty(N_prealloc,dtype='<U350')
+    
     cumulative_num_matches = 0
     
     for i in range(len(left)):
@@ -127,17 +136,21 @@ def find_matching_records(left,right,matching_cols,multiple_value_cols=[]):
             # Keep track of potential matches between right and left dataframe
             left_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = record.name
             right_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = right[mask].index.values
+
+            # Record attributes used for matching
+            match_key_string = '&'.join([f'({col}=={record[col]})' for col in matching_cols])
+            match_key_arr[cumulative_num_matches:(cumulative_num_matches+num_matches)] = match_key_string
+
+            # Increment counter
             cumulative_num_matches += num_matches
 
     # Drop preallocated elements that we didn't end up using
     left_match_indices = left_match_indices[:cumulative_num_matches]
     right_match_indices = right_match_indices[:cumulative_num_matches]
+    match_key_arr = match_key_arr[:cumulative_num_matches]
 
     # Save as dataframe
-    matched_records = pd.DataFrame({'left_index':left_match_indices,'right_index':right_match_indices})
-
-    # Record columns used for matching
-    matched_records['match_type'] = ' + '.join(matching_cols)
+    matched_records = pd.DataFrame({'left_index':left_match_indices,'right_index':right_match_indices,'match_key':match_key_arr})
     
     return(matched_records,unmatched_records)
 
@@ -176,7 +189,7 @@ claims = pd.read_parquet(claims_path,columns=usecols,filters=filters)
 missing_coordinate_mask = claims[['latitude','longitude']].isna().any(axis=1)
 claims_missing_coordinate_ids = claims[missing_coordinate_mask]['id'].to_list()
 claims = claims[~missing_coordinate_mask]
-bad_geocode_records = pd.DataFrame({'openfema_claim_id':claims_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_type':pd.NA})
+bad_geocode_records = pd.DataFrame({'openfema_claim_id':claims_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_key':pd.NA})
 outname = os.path.join(outfolder,f'{state}_claim_missing_latlon.parquet')
 bad_geocode_records.to_parquet(outname)
 
@@ -272,7 +285,7 @@ for i,chunk in enumerate(chunks_to_process):
                 matching_cols.pop(-1)
 
         chunk_matched_records = pd.concat(matched_records_list)
-        chunk_unmatched_records = pd.DataFrame({'left_index':unmatched_records,'right_index':pd.NA,'match_type':pd.NA})
+        chunk_unmatched_records = pd.DataFrame({'left_index':unmatched_records,'right_index':pd.NA,'match_key':pd.NA})
         chunk_info = pd.concat([chunk_matched_records,chunk_unmatched_records]).reset_index(drop=True)
     
         # Print statistics describing output of matching procedure
@@ -285,13 +298,24 @@ for i,chunk in enumerate(chunks_to_process):
         print(f'Median (IQR) number of matching buildings per NFIP record: {int(Q2)} ({int(Q1)}–{int(Q3)})')
                 
     else:
-        chunk_info = pd.DataFrame({'left_index':left.index.values,'right_index':pd.NA,'match_type':pd.NA})
+        chunk_info = pd.DataFrame({'left_index':left.index.values,'right_index':pd.NA,'match_key':pd.NA})
         print(f'No buildings in {state} fall within {chunk}, NFIP geocode is likely incorrect',flush=True)
 
-    # Save results to file
+    # Break match info into separate claim and building dataframes that can be joined via the match_key
+    # (this is a more efficient way to store the information) 
     chunk_info.rename(columns = {'left_index':'openfema_claim_id','right_index':'nsi_fd_id'},inplace=True)
-    outname = os.path.join(outfolder,f'{state}_claim_building_matches_{chunk}.parquet')
-    chunk_info.to_parquet(outname)
+    chunk_claim_info = chunk_info.groupby('openfema_claim_id').agg({'match_key':['first','count']})
+    chunk_claim_info.columns = ['match_key','num_matches']
+    chunk_claim_info = chunk_claim_info.sort_values(by='match_key').reset_index()
+    chunk_building_info = chunk_info[['match_key','nsi_fd_id']].dropna().drop_duplicates().sort_values(by='match_key').reset_index(drop=True)
+
+    # Save results to file
+    outname = os.path.join(outfolder,f'{state}_claim_matching_claim_info_{chunk}.parquet')
+    chunk_claim_info.to_parquet(outname)
+
+    # Save results to file
+    outname = os.path.join(outfolder,f'{state}_claim_matching_building_info_{chunk}.parquet')
+    chunk_building_info.to_parquet(outname)
 
     with open(completed_chunks_filepath, 'a') as f:
         f.write(f'{chunk}\n')
@@ -299,7 +323,14 @@ for i,chunk in enumerate(chunks_to_process):
 ## *** CONCATENATE RESULTS *** ###
 
 filepaths = [os.path.join(outfolder,x) for x in np.sort(os.listdir(outfolder)) if x.endswith('.parquet')]
-state_match_info = pd.concat([pd.read_parquet(f) for f in filepaths]).reset_index(drop=True)
-outname = os.path.join(pwd,'potential_matches',state,f'{state}_claim_building_matches.parquet')
-state_match_info.to_parquet(outname)
+claim_info_filepaths = [x for x in filepaths if 'claim_info' in x]
+building_info_filepaths = [x for x in filepaths if 'building_info' in x]
+
+state_claim_info = pd.concat([pd.read_parquet(f) for f in claim_info_filepaths]).reset_index(drop=True)
+outname = os.path.join(pwd,'potential_matches',state,f'{state}_claim_matching_claim_info.parquet')
+state_claim_info.to_parquet(outname)
+
+state_building_info = pd.concat([pd.read_parquet(f) for f in building_info_filepaths]).reset_index(drop=True)
+outname = os.path.join(pwd,'potential_matches',state,f'{state}_claim_matching_building_info.parquet')
+state_building_info.to_parquet(outname)
 
