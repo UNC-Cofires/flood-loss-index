@@ -133,6 +133,14 @@ def find_matching_records(left,right,matching_cols,multiple_value_cols=[],preall
         
         else:
 
+            # Check to make sure we're not going to exceed size of preallocated array. 
+            # Resize if needed.
+            if (cumulative_num_matches + num_matches > N_prealloc):
+                N_prealloc = max(int(1.5*N_prealloc),cumulative_num_matches + num_matches)
+                left_match_indices.resize(N_prealloc)
+                right_match_indices.resize(N_prealloc)
+                match_key_arr.resize(N_prealloc)
+
             # Keep track of potential matches between right and left dataframe
             left_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = record.name
             right_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = right[mask].index.values
