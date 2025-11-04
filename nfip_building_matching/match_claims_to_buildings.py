@@ -51,11 +51,123 @@ def simplify_openfema_occupancy_types(openfema_occtype):
 
     return simplified_occtype
 
+def determine_match_keys(left_record,right,matching_cols,multiple_value_cols=[]):
 
-def find_matching_records(left,right,matching_cols,multiple_value_cols=[],preallocate_per_record=1500,preallocate_cutoff=3000):
     """
-    This function identifies potential matches between OpenFEMA records and NSI building points. 
+    This function determines the combination of attributes that can be used to match
+    a given OpenFEMA record to building points. 
+
+    param: left_record: row of pandas dataframe of NFIP claim or policy records. Index should be unique. 
+    param: right: pandas dataframe of building points. Index of each row should be unique. 
+    param: matching_cols: list of columns used to match records in the left dataframe to records 
+                          in the right dataframe. Each column should be present and represented 
+                          as a consistent data type in both the left and right dataframes. If a 
+                          field can take on multiple values in the right dataframe, then the 
+                          column should have "_values" appended to its name in the right 
+                          dataframe but not the left dataframe. 
+    param: multiple_value_cols: list of columns in the right dataframe that are allowed to take on
+                                multiple values (e.g., a building can have multiple 
+                                censusBlockGroupFips as GEOIDs are updated with each census)
+    returns: match_key: string representing unique combination of attributes used to match left_record to entries in right dataframe. 
+    returns: match_type: string describing columns used to create match. 
+    returns: match_precision: number of attributes used to match left_record. 
+    returns: num_matches: number of records in right dataframe with the same attributes as left_record. 
+    """
+
+    # If a record has missing attributes, remove those from columns used for matching
+    matching_cols = [x for x in matching_cols if not pd.isna(left_record[x])]
+
+    multiple_value_indicator = [x in multiple_value_cols for x in matching_cols]
+    match_key = pd.NA
+    match_type = pd.NA
+    num_matches = 0
+
+    # Initialize logical array used for filtering
+    match_filter = np.full((len(right),len(matching_cols)),False)
+
+    # Populate each column of logical array based on different critiera used for matching
+    for i,col in enumerate(matching_cols):
+        
+        if multiple_value_indicator[i]:
+            
+            # If multiple values allowed, check if left value shows up in right record's string of comma-separated allowed values.
+            # A more generalizable way to do this would be to first convert the string literal to an actual list in python; 
+            # however, doing so results in runtimes that are 4x longer. The current method is relatively fast, but would fail
+            # in situations where you might have identifiers that can be substrings of one another 
+            # (e.g., '123' would match to '123', '0123', and '1234'). Because we are mainly interested in identifiers
+            # such as census GEOIDS (which are all the same length and unique), this should not be a problem for 
+            # this project. This assumption may not be valid for other types of identifiers. 
+            
+            match_filter[:,i] = (right[f'{col}_values'].str.contains(left_record[col])).fillna(False).to_numpy()
+            
+        else:
+            # If exact match required, check for equality between left value and right value
+            match_filter[:,i] = (right[col] == left_record[col]).fillna(False).to_numpy()
+
+    match_precision = len(matching_cols)
+    keepgoing = True
+
+    while keepgoing:
+
+        # Check whether there's any records in right dataframe that satisfy all criteria
+        num_matches = match_filter[:,:match_precision].all(axis=1).sum()
+
+        if num_matches > 0:
+            # If so, stop and record criteria used to identify matches
+            match_key = '&'.join([f'({col}=={left_record[col]})' for col in matching_cols[:match_precision]])
+            match_type = '+'.join(matching_cols[:match_precision])
+            keepgoing = False
+        elif (match_precision > 0):
+            # If not, eliminate the least important criteria
+            match_precision -= 1
+        else:
+            # Stop if there's no more criteria left to eliminate
+            keepgoing = False
+
+    return(match_key,match_type,match_precision,num_matches)
+
+def create_lookup_table(match_record,right,multiple_value_cols=[]):
+    """
+    This function returns the records in the right dataframe associated with a given match_key. 
     
+    param: match_record: row of pandas dataframe describing characteristics of each match_key. 
+    param: pandas dataframe of building points. Index of each row should be unique. 
+    param: multiple_value_cols: list of columns in the right dataframe that are allowed to take on
+                                multiple values (e.g., a building can have multiple 
+                                censusBlockGroupFips as GEOIDs are updated with each census)
+    returns: dataframe listing indices of records in right dataframe associated with a given match_key. 
+    """
+
+    # Get attributes used for matching
+    matching_cols = match_record['match_type'].split('+')
+    multiple_value_indicator = [x in multiple_value_cols for x in matching_cols]
+
+    # Initialize logical array used for filtering
+    mask = pd.Series(True,index=right.index)
+
+    for col,mv in zip(matching_cols,multiple_value_indicator):
+        
+        if mv:
+            # If multiple values allowed, check if left value shows up in right record's string of comma-separated allowed values.
+            # A more generalizable way to do this would be to first convert the string literal to an actual list in python; 
+            # however, doing so results in runtimes that are 4x longer. The current method is relatively fast, but would fail
+            # in situations where you might have identifiers that can be substrings of one another 
+            # (e.g., '123' would match to '123', '0123', and '1234'). Because we are mainly interested in identifiers
+            # such as census GEOIDS (which are all the same length and unique), this should not be a problem for 
+            # this project. This assumption may not be valid for other types of identifiers.  
+            mask &= (right[f'{col}_values'].str.contains(match_record[col]))
+        else:
+            # If exact match required, check for equality
+            mask &= (right[col] == match_record[col])
+
+    right_indices = right[mask].index.values
+
+    return(pd.DataFrame({'match_key':match_record['match_key'],'right_index':right_indices}))
+
+def identify_potential_matches(left,right,matching_cols,multiple_value_cols=[]):
+    """
+    This function identifies potential matches between OpenFEMA records and building points. 
+
     param: left: pandas dataframe of claim/policy records. Index of each row should be unique.
     param: right: pandas dataframe of building points. Index of each row should be unique. 
     param: matching_cols: list of columns used to match records in the left dataframe to records 
@@ -67,100 +179,27 @@ def find_matching_records(left,right,matching_cols,multiple_value_cols=[],preall
     param: multiple_value_cols: list of columns in the right dataframe that are allowed to take on
                                 multiple values (e.g., a building can have multiple 
                                 censusBlockGroupFips as GEOIDs are updated with each census)
-    param: preallocate_per_record: integer denoting high estimate of number of matching buildings per NFIP record. 
-    param: preallocate_cutoff: number of records below which to switch to a safer preallocation method. 
-    returns: matched_records: pandas dataframe where each row corresponds to a pair of matching records. 
-    returns: unmatched_records: list of indices in left dataframe that failed to match. 
+
+    returns: left_match_info: dataframe describing match keys associated with each record in left dataframe, 
+                            plus other information about the match. 
+    returns: right_match_info: dataframe that describes building ids associated with each match key. 
     """
 
-    # Create boolean array that we'll use to keep track of which columns have multiple allowed values
-    # in right dataframe
-    multiple_value_indicator = [x in multiple_value_cols for x in matching_cols]
-
-    # Create list of records that don't match to a building
-    unmatched_records = []
+    # Determine match_keys for each record in left dataframe
+    left[['match_key','match_type','match_precision','num_matches']] = left.apply(determine_match_keys,args=(right,matching_cols),multiple_value_cols=multiple_value_cols,axis=1,result_type='expand')
+    left_match_info = left[['match_key','match_type','match_precision','num_matches']].copy()
+    left_match_info.index.name = 'left_index'
+    left_match_info.reset_index(inplace=True)
     
-    # Records that have missing values in any of the columns used for matching 
-    missing_mask = left[matching_cols].isna().any(axis=1)
-    unmatched_records += list(left[missing_mask].index.values)
+    # Get list of unique match_keys and associated attributes
+    match_key_info = left[left['num_matches'] > 0]
+    match_key_info = match_key_info[['match_key','match_type','match_precision','num_matches']+matching_cols].groupby('match_key').first().reset_index()
+
+    # Create table that will allow us to quickly look up the indices of records 
+    # in the right dataframe that are associated with a given match_key
+    right_match_info = pd.concat([create_lookup_table(match_record,right,multiple_value_cols=multiple_value_cols) for i,match_record in match_key_info.iterrows()]).reset_index(drop=True)
     
-    # Drop records with missing values from this round of the matching procedure
-    # (Can later attempt to match these using a smaller subset of columns)
-    left = left[~missing_mask]
-    
-    # Preallocate arrays to store matching information
-    if len(left) > preallocate_cutoff:
-        N_prealloc = len(left)*preallocate_per_record
-    else:
-        N_prealloc = len(left)*len(right)
-    
-    left_match_indices = np.empty(N_prealloc,dtype=left.index.to_numpy().dtype)
-    right_match_indices = np.empty(N_prealloc,dtype=right.index.to_numpy().dtype)
-    match_key_arr = np.empty(N_prealloc,dtype='<U350')
-    
-    cumulative_num_matches = 0
-    
-    for i in range(len(left)):
-        
-        record = left.iloc[i]
-        
-        # Initialize logical array used for filtering
-        mask = pd.Series(True,index=right.index)
-        
-        for col,mv in zip(matching_cols,multiple_value_indicator):
-        
-            if mv:
-                # If multiple values allowed, check if left value shows up in right record's string of comma-separated allowed values.
-                # A more generalizable way to do this would be to first convert the string literal to an actual list in python; 
-                # however, doing so results in runtimes that are 4x longer. The current method is relatively fast, but would fail
-                # in situations where you might have identifiers that can be substrings of one another 
-                # (e.g., '123' would match to '123', '0123', and '1234'). Because we are mainly interested in identifiers
-                # such as census GEOIDS (which are all the same length and unique), this should not be a problem for 
-                # this project. This assumption may not be valid for other types of identifiers.  
-                mask &= (right[f'{col}_values'].str.contains(record[col]))
-            else:
-                # If exact match required, check for equality between left value and right value
-                mask &= (right[col] == record[col])
-
-        # Get number of potential matches in right dataframe
-        num_matches = np.sum(mask)
-
-        if num_matches == 0:
-
-            # If no matching records in right dataframe, add to list of unmatched records
-            # (can try again in next round using a subset of columns)
-            unmatched_records += [record.name]
-        
-        else:
-
-            # Check to make sure we're not going to exceed size of preallocated array. 
-            # Resize if needed.
-            if (cumulative_num_matches + num_matches > N_prealloc):
-                N_prealloc = max(int(1.5*N_prealloc),cumulative_num_matches + num_matches)
-                left_match_indices.resize(N_prealloc)
-                right_match_indices.resize(N_prealloc)
-                match_key_arr.resize(N_prealloc)
-
-            # Keep track of potential matches between right and left dataframe
-            left_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = record.name
-            right_match_indices[cumulative_num_matches:(cumulative_num_matches+num_matches)] = right[mask].index.values
-
-            # Record attributes used for matching
-            match_key_string = '&'.join([f'({col}=={record[col]})' for col in matching_cols])
-            match_key_arr[cumulative_num_matches:(cumulative_num_matches+num_matches)] = match_key_string
-
-            # Increment counter
-            cumulative_num_matches += num_matches
-
-    # Drop preallocated elements that we didn't end up using
-    left_match_indices = left_match_indices[:cumulative_num_matches]
-    right_match_indices = right_match_indices[:cumulative_num_matches]
-    match_key_arr = match_key_arr[:cumulative_num_matches]
-
-    # Save as dataframe
-    matched_records = pd.DataFrame({'left_index':left_match_indices,'right_index':right_match_indices,'match_key':match_key_arr})
-    
-    return(matched_records,unmatched_records)
+    return(left_match_info,right_match_info)
 
 ### *** INITIAL SETUP *** ###
 
@@ -259,71 +298,47 @@ for i,chunk in enumerate(chunks_to_process):
 
     if num_buildings > 0:
 
-        # Specify which columns to use for matching.
-        # List these in order of priority, with most important coming first.
-        # At the end of each round, if any unmatched records remain, we'll eliminate the 
-        # Least important column from this list, and attempt to get a less precise match. 
+        # Attempt to match OpenFEMA records to buildings
         
         matching_cols = ['match_latitude',
-                         'match_longitude',
-                         'match_censusBlockGroupFips',
-                         'match_sfhaIndicator',
-                         'match_coastalFloodZoneIndicator',
-                         'match_reportedZipCode',
-                         'match_simplifiedOccupancyType']
+                 'match_longitude',
+                 'match_censusBlockGroupFips',
+                 'match_sfhaIndicator',
+                 'match_coastalFloodZoneIndicator',
+                 'match_reportedZipCode',
+                 'match_simplifiedOccupancyType']
 
-        matched_records_list = []
-        unmatched_records = list(left.index.values)
-        keepgoing = True
+        multiple_value_cols = ['match_censusBlockGroupFips']
+        
+        left_match_info,right_match_info = identify_potential_matches(left,right,matching_cols,multiple_value_cols=multiple_value_cols)
 
-        while keepgoing:
-
-            left = left[left.index.isin(unmatched_records)]
-            matched_records,unmatched_records = find_matching_records(left,right,matching_cols,multiple_value_cols=['match_censusBlockGroupFips'])
-            matched_records_list.append(matched_records.copy())
-
-            if (len(unmatched_records) == 0) or (len(matching_cols) <= 1):
-                # Stop if all records are matched or if the number of columns
-                # used for matching has been whittled down to nothing
-                keepgoing = False
-            else:
-                # Otherwise, attempt to perform a less precise match for 
-                # remaining unmatched records, removing the least important
-                # data field used for matching that still remains
-                matching_cols.pop(-1)
-
-        chunk_matched_records = pd.concat(matched_records_list)
-        chunk_unmatched_records = pd.DataFrame({'left_index':unmatched_records,'right_index':pd.NA,'match_key':pd.NA})
-        chunk_info = pd.concat([chunk_matched_records,chunk_unmatched_records]).reset_index(drop=True)
-    
         # Print statistics describing output of matching procedure
-        num_records_matched = len(chunk_matched_records['left_index'].unique())
-        num_records_unmatched = len(chunk_unmatched_records)
-        Q1,Q2,Q3 = chunk_matched_records.groupby('left_index')['right_index'].count().quantile([0.25,0.5,0.75])
+        matched_mask = (left_match_info['num_matches']>0)
+        num_records_matched = np.sum(matched_mask)
+        num_records_unmatched = np.sum(~matched_mask)
+        Q1,Q2,Q3 = left_match_info[matched_mask]['num_matches'].quantile([0.25,0.5,0.75])
     
         print(f'Number of NFIP records matched to at least one building: {num_records_matched}',flush=True)
-        print(f'Number of NFIP records with no matching buildings: {len(unmatched_records)}',flush=True)
+        print(f'Number of NFIP records with no matching buildings: {num_records_unmatched}',flush=True)
         print(f'Median (IQR) number of matching buildings per NFIP record: {int(Q2)} ({int(Q1)}–{int(Q3)})')
                 
     else:
-        chunk_info = pd.DataFrame({'left_index':left.index.values,'right_index':pd.NA,'match_key':pd.NA})
+        left_match_info = pd.DataFrame({'left_index':left.index.values,'match_key':pd.NA,'match_type':pd.NA,'match_precision':0,'num_matches':0})
+        right_match_info = pd.DataFrame({'match_key':[pd.NA],'right_index':[pd.NA]})
         print(f'No buildings in {state} fall within {chunk}, NFIP geocode is likely incorrect',flush=True)
 
-    # Break match info into separate claim and building dataframes that can be joined via the match_key
-    # (this is a more efficient way to store the information) 
-    chunk_info.rename(columns = {'left_index':'openfema_claim_id','right_index':'nsi_fd_id'},inplace=True)
-    chunk_claim_info = chunk_info.groupby('openfema_claim_id').agg({'match_key':['first','count']})
-    chunk_claim_info.columns = ['match_key','num_matches']
-    chunk_claim_info = chunk_claim_info.sort_values(by='match_key').reset_index()
-    chunk_building_info = chunk_info[['match_key','nsi_fd_id']].dropna().drop_duplicates().sort_values(by='match_key').reset_index(drop=True)
-
+    # Rename record unique identifiers to be more interpretable
+    left_match_info.rename(columns={'left_index':'openfema_claim_id'},inplace=True)
+    right_match_info.rename(columns={'right_index':'nsi_fd_id'},inplace=True)
+    
     # Save results to file
     outname = os.path.join(outfolder,f'{state}_claim_matching_claim_info_{chunk}.parquet')
-    chunk_claim_info.to_parquet(outname)
+    left_match_info.to_parquet(outname)
 
     # Save results to file
-    outname = os.path.join(outfolder,f'{state}_claim_matching_building_info_{chunk}.parquet')
-    chunk_building_info.to_parquet(outname)
+    if num_buildings > 0:
+        outname = os.path.join(outfolder,f'{state}_claim_matching_building_info_{chunk}.parquet')
+        right_match_info.to_parquet(outname)
 
     with open(completed_chunks_filepath, 'a') as f:
         f.write(f'{chunk}\n')
