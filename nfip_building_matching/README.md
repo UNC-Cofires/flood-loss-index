@@ -27,4 +27,25 @@ Information on the following geographic identifiers was spatially joined to the 
 
 ## Identifying potential matches between NFIP records and building points
 
+The `match_claims_to_buildings.py` and `match_policies_to_buildings.py` scripts are used to identify potential matches between NFIP claim and policy records and NSI building points based on combinations of geographic attributes available in both datasets. By considering multiple attributes in combination, it is possible to locate each NFIP record to a smaller group of buildings than would be possible using each attribute in isolation. For each NFIP record, matching buildings are identified based on the following attributes:
+
+| Priority | Variable                              | Data type | Column name*                     | Multiple values* | Notes                                                                                                                                                               |
+|----------|---------------------------------------|-----------|---------------------------------|-----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1        | Rounded latitude                    | string    | `match_latitude`                  | N               | Cleaned version of `latitude` column in OpenFEMA. Rounded to nearest 0.1 degree.                                                                                           |
+| 2        | Rounded longitude                   | string    | `match_longitude`                 | N               | Cleaned version of `longitude` column in OpenFEMA. Rounded to nearest 0.1 degree.                                                                                  |
+| 3        | Census block group              | string    | `match_censusBlockGroupFips`*      | Y               | Cleaned version of `censusBlockGroupFips` column in OpenFEMA. Can take on multiple values in buildings data (see footnote).                                                                                                       |
+| 4        | SFHA flag | integer   | `match_sfhaIndicator`             | N               | Derived from `ratedFloodZone` column in OpenFEMA.                                                                                                                   |
+| 5        | Coastal flood zone flag               | integer   | `match_coastalFloodZoneIndicator` | N               | Derived from `ratedFloodZone` column in OpenFEMA.                                                                                                                   |
+| 6        | Zip code                     | string    | `match_reportedZipCode`           | N               | Cleaned version of `reportedZipCode` column in OpenFEMA. Used 2025 ZCTA as a proxy for zip code in buildings data.                                                                                                           |
+| 7        | Broad occupancy type                  | string    | `match_simplifiedOccupancyType`   | N               | Derived from `occupancyType` column in OpenFEMA. Occupancy codes were collapsed into four categories: `residential_single_family`,`residential_two_to_four_family`,`residential_other`, and `non_residential`. |
+
+*Because OpenFEMA does not record the vintage year associated with census block group GEOIDs, we allow NFIP records to match to any building with a matching GEOID in any of the 2000, 2010, or 2020 vintage years. To facilitate this, the buildings dataset should include a column called `match_censusBlockGroupFips_values` where the GEOID of each building across different vintage years is recorded as a comma-separated list (e.g.,`"['440010301001','440070107021','440070107023']"`).
+
+We used the following algorithm: 
+
+![alt text](https://github.com/UNC-Cofires/flood-loss-index/blob/main/nfip_building_matching/images/building_matching_flowchart.png "Logo Title Text 1")
+
+
+
+
 ## Generating presence-absence points for specific events
