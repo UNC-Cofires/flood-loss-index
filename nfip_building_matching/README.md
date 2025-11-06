@@ -47,5 +47,13 @@ Our approach will initially attempt to find a precise match based on all seven o
 
 For each U.S. state, the `match_claims_to_buildings.py` and `match_policies_to_buildings.py` scripts will create tables that allow users to quickly look up the ids of buildings that could potentially be associated with a given claim or policy record. This is done via the creation of a `match_key` variable, which is a string representing the combination of attributes used to link each record to a collection of buildings with matching characteristics. For more information on the structure of these lookup tables, please see the `example_output_policy_info.csv` and `example_output_building_lookup.csv` sample files. 
 
+In the state of North Carolina, 99.92% of claim records and 99.98% of policy records were matched to one or more buildings. Records that failed to match to a building typically did so due to missing or contradictory geographic identifiers in OpenFEMA (e.g., latitude/longitude coordinates that are missing or associated with an out-of-state location); however, missing buildings in the NSI dataset could also be a contributing factor, particularly in areas with high levels of new development. Among NFIP claims and policies with at least one match, the median (IQR) number of potential building matches identified per record is shown below: 
+
+|          | Median (IQR) number of matching buildings per claim | Median (IQR) number of matching buildings per policy |
+|----------|-----------------------------------------------------|------------------------------------------------------|
+| Overall  | 136 (36–418)                                        | 206 (51–568)                                         |
+| SFHA     | 107 (29–294)                                        | 91 (24–301)                                          |
+| Non-SFHA | 372 (127–784)                                       | 500 (226–923)                                        |
+
 
 ## Generating presence-absence points for specific events
