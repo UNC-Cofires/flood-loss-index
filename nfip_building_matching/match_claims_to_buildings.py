@@ -185,14 +185,27 @@ def identify_potential_matches(left,right,matching_cols,multiple_value_cols=[]):
     returns: right_match_info: dataframe that describes building ids associated with each match key. 
     """
 
-    # Determine match_keys for each record in left dataframe
-    left[['match_key','match_type','match_precision','num_matches']] = left.apply(determine_match_keys,args=(right,matching_cols),multiple_value_cols=multiple_value_cols,axis=1,result_type='expand')
-    left_match_info = left[['match_key','match_type','match_precision','num_matches']].copy()
+    # Enumerate unique combinations of matching attributes observed in data
+    # We'll use this number to group together rows that have the same attributes
+    left.sort_values(by=matching_cols,inplace=True)
+    left['group_key'] = (~left[matching_cols].duplicated()).astype(int).cumsum()
+    
+    # For each of these groups, we only need to search for matching buildings once
+    # (much more efficient than doing a search for each record)
+    left_groups = left.drop_duplicates(subset=matching_cols).set_index('group_key')
+    
+    # Identify potential building matches for each attribute combination 
+    left_groups[['match_key','match_type','match_precision','num_matches']] = left_groups.apply(determine_match_keys,args=(right,matching_cols),multiple_value_cols=multiple_value_cols,axis=1,result_type='expand')
+    
+    # Propagate match info back to each record based on group number
+    left_match_info = left_groups.loc[left['group_key'],['match_key','match_type','match_precision','num_matches']]
+    left_match_info.index = left.index
     left_match_info.index.name = 'left_index'
     left_match_info.reset_index(inplace=True)
-    
+
     # Get list of unique match_keys and associated attributes
-    match_key_info = left[left['num_matches'] > 0]
+    # (might be smaller than number of left groups due to buildings matching on subset of columns)
+    match_key_info = left_groups[left_groups['num_matches'] > 0]
     match_key_info = match_key_info[['match_key','match_type','match_precision','num_matches']+matching_cols].groupby('match_key').first().reset_index()
 
     # Create table that will allow us to quickly look up the indices of records 
