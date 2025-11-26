@@ -11,7 +11,7 @@ def is_sfha_zone(x):
     Returns 1 for SFHA zones, and zero otherwise. 
     """
     if not pd.isna(x):
-        return int(x.startswith('A') or x.startswith('V'))
+        return int(x.upper().startswith('A') or x.upper().startswith('V'))
     else:
         return 0
 
@@ -21,7 +21,7 @@ def is_coastal_flood_zone(x):
     a coastal flood hazard zone. 
     """
     if not pd.isna(x):
-        return int(x.startswith('V'))
+        return int(x.upper().startswith('V'))
     else:
         return 0
 
@@ -238,7 +238,7 @@ buildings = pd.read_parquet(buildings_path)
 
 # OpenFEMA NFIP claims data
 claims_path = '/proj/characklab/projects/kieranf/OpenFEMA/FimaNfipClaims.parquet'
-usecols = ['id','state','latitude','longitude','censusBlockGroupFips','reportedZipCode','ratedFloodZone','occupancyType']
+usecols = ['id','state','latitude','longitude','countyCode','censusBlockGroupFips','reportedZipCode','ratedFloodZone','occupancyType']
 filters = [('state','=',state)]
 claims = pd.read_parquet(claims_path,columns=usecols,filters=filters)
 
@@ -257,6 +257,7 @@ bad_geocode_records.to_parquet(outname)
 # (should already be present in building points dataset)
 claims['match_latitude'] = claims['latitude'].apply(lambda x: f'{x:.1f}')
 claims['match_longitude'] = claims['longitude'].apply(lambda x: f'{x:.1f}')
+claims['match_countyCode'] = claims['countyCode'].copy()
 claims['match_censusBlockGroupFips'] = claims['censusBlockGroupFips'].copy()
 claims['match_sfhaIndicator'] = claims['ratedFloodZone'].apply(is_sfha_zone)
 claims['match_coastalFloodZoneIndicator'] = claims['ratedFloodZone'].apply(is_coastal_flood_zone)
@@ -314,14 +315,14 @@ for i,chunk in enumerate(chunks_to_process):
         # Attempt to match OpenFEMA records to buildings
         
         matching_cols = ['match_latitude',
-                 'match_longitude',
-                 'match_censusBlockGroupFips',
-                 'match_sfhaIndicator',
-                 'match_coastalFloodZoneIndicator',
-                 'match_reportedZipCode',
-                 'match_simplifiedOccupancyType']
+                         'match_longitude',
+                         'match_countyCode',
+                         'match_censusBlockGroupFips',
+                         'match_sfhaIndicator',
+                         'match_coastalFloodZoneIndicator',
+                         'match_reportedZipCode']
 
-        multiple_value_cols = ['match_censusBlockGroupFips']
+        multiple_value_cols = ['match_countyCode','match_censusBlockGroupFips']
         
         left_match_info,right_match_info = identify_potential_matches(left,right,matching_cols,multiple_value_cols=multiple_value_cols)
 
