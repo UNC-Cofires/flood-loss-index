@@ -16,7 +16,10 @@ def sample_raster(filepath,xy_coords,band=1):
     """
     
     with rio.open(filepath,'r') as src:
-        values = np.array([v[0] for v in rio.sample.sample_gen(src, xy_coords,indexes=band)])
+        nodata_value = src.nodata
+        values = pd.Series([v[0] for v in rio.sample.sample_gen(src, xy_coords,indexes=band)])
+
+    values[values==nodata_value] = pd.NA
         
     return(values)
 
@@ -24,19 +27,31 @@ def sample_raster(filepath,xy_coords,band=1):
 
 # Specify raster processing unit (RPU) of interest (passed as command-line argument)
 RPU=sys.argv[1]
+print(RPU,flush=True)
 outfolder = f'/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/{RPU}'
 
 # Specify path to raster data files
-raster_variables = ['nhd_catchment_comid','elev_cm','dist_wb_m','hand_wb_cm','slope_x1000','geomorphon','tpi_cm','fac']
+raster_variables = ['nhd_catchment_comid',
+                    'cora_shoreline_node',
+                    'dist_coast_m',
+                    'elev_cm',
+                    'dist_wb_m',
+                    'hand_wb_cm',
+                    'slope_x1000',
+                    'geomorphon',
+                    'tpi_cm',
+                    'fac']
+
 raster_paths = [os.path.join(outfolder,f'{RPU}_{var}.tif') for var in raster_variables]
 
 # Specify coordinate reference system
 crs = 'EPSG:5070'
 
 # Read in building/structure points
-structure_info_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/NSI/CONUS_structure_info.parquet'
+structure_info_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/structure_info/CONUS_structure_info.parquet'
 structure_info = pd.read_parquet(structure_info_path,filters=[('rpu_id','==',RPU)]).sort_values(by=['x_epsg5070','y_epsg5070'])
 structures = gpd.GeoDataFrame(structure_info, geometry=gpd.points_from_xy(structure_info['x_epsg5070'], structure_info['y_epsg5070'],crs=crs))
+structures.reset_index(drop=True)
 
 ### *** SAMPLE RASTERS *** ###
 
@@ -49,6 +64,6 @@ for filepath,variable in zip(raster_paths,raster_variables):
     structures[variable] = sample_raster(filepath,xy_coords)
     
 ### *** SAVE RESULTS *** ###
-structures.drop(columns=['geometry'],inplace=True)
+structures = structures[['BUILD_ID']+raster_variables]
 outname = os.path.join(outfolder,f'{RPU}_raster_values_at_structure_points.parquet')
 structures.to_parquet(outname)
