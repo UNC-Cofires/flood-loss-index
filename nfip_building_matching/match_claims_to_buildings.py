@@ -243,7 +243,7 @@ claims = pd.read_parquet(claims_path,columns=usecols,filters=filters)
 missing_coordinate_mask = claims[['latitude','longitude']].isna().any(axis=1)
 claims_missing_coordinate_ids = claims[missing_coordinate_mask]['id'].to_list()
 claims = claims[~missing_coordinate_mask]
-bad_geocode_records = pd.DataFrame({'openfema_claim_id':claims_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_key':pd.NA})
+bad_geocode_records = pd.DataFrame({'openfema_claim_id':claims_missing_coordinate_ids,'BUILD_ID':pd.NA,'match_key':pd.NA})
 outname = os.path.join(outfolder,f'{state}_claim_missing_latlon.parquet')
 bad_geocode_records.to_parquet(outname)
 

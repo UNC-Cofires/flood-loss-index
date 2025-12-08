@@ -30,24 +30,18 @@ def simplify_openfema_occupancy_types(openfema_occtype):
     This function collapses the occupancy types listed in the OpenFEMA NFIP claims & policies datasets
     into the following simplified categories: 
 
-    (1) residential_single_family
-    (2) residential_two_to_four_family
-    (3) residential_other
-    (4) non_residential
+    (1) Residential structures ("R")
+    (2) Non-residential structures ("NR")
     
     param: openfema_occtype: integer denoting occupancy type listed in OpenFEMA dataset (e.g., 11)
     """
 
     simplified_occtype = pd.NA
 
-    if openfema_occtype in [1,11]:
-        simplified_occtype = 'residential_single_family'
-    elif openfema_occtype in [2,12]:
-        simplified_occtype = 'residential_two_to_four_family'
-    elif openfema_occtype in [3,13,14,15,16]:
-        simplified_occtype = 'residential_other'
-    elif openfema_occtype in [4,6,17,18,19]:
-        simplified_occtype = 'non_residential'
+    if openfema_occtype in [4,6,17,18,19]:
+        simplified_occtype = 'NR'
+    else:
+        simplified_occtype = 'R'
 
     return simplified_occtype
 
@@ -233,7 +227,7 @@ if not os.path.exists(outfolder):
 ### *** LOAD DATA SOURCES *** ###
 
 # Building points
-buildings_path = f'/proj/characklab/projects/kieranf/flood_damage_index/data/NSI/{state}/{state}_structure_info.parquet'
+buildings_path = f'/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/structure_info/{state}/{state}_structure_info.parquet'
 buildings = pd.read_parquet(buildings_path)
 
 # OpenFEMA NFIP policy data
@@ -249,7 +243,7 @@ policies = pd.read_parquet(policies_path,columns=usecols,filters=filters)
 missing_coordinate_mask = policies[['latitude','longitude']].isna().any(axis=1)
 policies_missing_coordinate_ids = policies[missing_coordinate_mask]['id'].to_list()
 policies = policies[~missing_coordinate_mask]
-bad_geocode_records = pd.DataFrame({'openfema_policy_id':policies_missing_coordinate_ids,'nsi_fd_id':pd.NA,'match_key':pd.NA})
+bad_geocode_records = pd.DataFrame({'openfema_policy_id':policies_missing_coordinate_ids,'BUILD_ID':pd.NA,'match_key':pd.NA})
 outname = os.path.join(outfolder,f'{state}_policy_missing_latlon.parquet')
 bad_geocode_records.to_parquet(outname)
 
@@ -305,7 +299,7 @@ for i,chunk in enumerate(chunks_to_process):
     # Pull out NFIP records and building points that fall inside chunk grid cell
     # Also set the index of these dataframes to be uniquely identifying
     left = policies[policy_chunk_mask].copy().set_index('id')
-    right = buildings[building_chunk_mask].copy().set_index('fd_id')
+    right = buildings[building_chunk_mask].copy().set_index('BUILD_ID')
 
     print(f'Number of NFIP records: {num_records}',flush=True)
     print(f'Number of building points: {num_buildings}',flush=True)
@@ -320,7 +314,8 @@ for i,chunk in enumerate(chunks_to_process):
                          'match_censusBlockGroupFips',
                          'match_sfhaIndicator',
                          'match_coastalFloodZoneIndicator',
-                         'match_reportedZipCode']
+                         'match_reportedZipCode',
+                         'match_simplifiedOccupancyType']
 
         multiple_value_cols = ['match_countyCode','match_censusBlockGroupFips']
         
@@ -343,7 +338,7 @@ for i,chunk in enumerate(chunks_to_process):
 
     # Rename record unique identifiers to be more interpretable
     left_match_info.rename(columns={'left_index':'openfema_policy_id'},inplace=True)
-    right_match_info.rename(columns={'right_index':'nsi_fd_id'},inplace=True)
+    right_match_info.rename(columns={'right_index':'BUILD_ID'},inplace=True)
     
     # Save results to file
     outname = os.path.join(outfolder,f'{state}_policy_matching_policy_info_{chunk}.parquet')
