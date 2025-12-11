@@ -84,7 +84,7 @@ claim_timeseries = claims.groupby(['countyCode','sfhaIndicator']).apply(claims_o
 
 # Save results
 outname = os.path.join(outfolder,'daily_nfip_policies_in_force_by_county_SFHA.parquet')
-policy_timeseries.to_csv(outname)
+policy_timeseries.to_parquet(outname)
 
 outname = os.path.join(outfolder,'daily_nfip_claims_by_county_SFHA.parquet')
-claim_timeseries.to_csv(outname)
+claim_timeseries.to_parquet(outname)
