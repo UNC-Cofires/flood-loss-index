@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import networkx as nx
 import pickle
 import os
@@ -15,6 +16,10 @@ if not os.path.exists(outfolder):
     os.makedirs(outfolder,exist_ok=True)
 
 ### *** LOAD DATA *** ###
+
+## NHDPlusV2 catchments
+NHD_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/NHDPlusMRData/NHDPlusNationalData/NHDPlusV21_National_Seamless_Flattened_Lower48.gdb'
+catchments = gpd.read_file(NHD_path,layer='Catchment',columns=['FEATUREID','AreaSqKM'],ignore_geometry=True).rename(columns={'FEATUREID':'comid','AreaSqKM':'areasqkm'})
 
 # Specify path to enhanced NHDPlusV2 flow network dataset
 # (This dataset more accurately models connectivity between flowlines than original release)
@@ -99,11 +104,13 @@ flowtable['wave_travel_time_hr'] = travel_time/3600
 G_downstream = nx.DiGraph()
 
 # Add nodes
-G_downstream.add_nodes_from(flowtable['comid'])
+node_info = pd.concat([flowtable[['comid','areasqkm']],catchments[['comid','areasqkm']]]).drop_duplicates(subset=['comid']).reset_index(drop=True)
+nodes = [(int(x[0]),{'areasqkm':x[1]}) for x in node_info.to_numpy()]
+G_downstream.add_nodes_from(nodes)
 
 # Add edges
 terminal_flows = (flowtable['tocomid']==0) # Want to exclude terminal flows 
-edges = [(int(x[0]),int(x[1]),{'areasqkm':x[2],'lengthkm':x[3],'wave_travel_time_hr':x[4]}) for x in flowtable[~terminal_flows][['comid','tocomid','areasqkm','lengthkm','wave_travel_time_hr']].to_numpy()]
+edges = [(int(x[0]),int(x[1]),{'lengthkm':x[2],'wave_travel_time_hr':x[3]}) for x in flowtable[~terminal_flows][['comid','tocomid','lengthkm','wave_travel_time_hr']].to_numpy()]
 G_downstream.add_edges_from(edges)
 
 # Create version of graph with arrows reversed that will allow us to look upstream
@@ -113,6 +120,9 @@ G_upstream = G_downstream.reverse(copy=True)
 
 outname = os.path.join(outfolder,'enhd_flowtable_modified.parquet')
 flowtable.to_parquet(outname)
+
+outname = os.path.join(outfolder,'nhd_catchment_area.parquet')
+node_info.to_parquet(outname)
 
 outname = os.path.join(outfolder,'flow_network_directed_graph_downstream.pickle')
 with open(outname, 'wb') as f:
