@@ -120,6 +120,10 @@ buildings['state'] = state
 buildings['x_epsg5070'] = buildings['geometry'].x
 buildings['y_epsg5070'] = buildings['geometry'].y
 
+# USA structures building ID is only unique within a given state. 
+# To make unique across nation, append the state abbreviation to the ID. 
+buildings['BUILD_ID'] = f'{state}_' + buildings['BUILD_ID'].astype('string[pyarrow]')
+
 # Read in old county boundaries
 # (need to do this since CT revised maps in 2022)
 old_counties_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/geospatial_data/USA_counties/gz_2010_us_050_00_500k'
@@ -217,6 +221,7 @@ print(f'Ending number of buildings: {len(buildings)}',flush=True)
 for col in ['FLD_ZONE','SFHA_TF']:
     buildings.rename(columns={col:f'NFHL2025_{col}_values'},inplace=True)
 
+buildings['match_state'] = state
 buildings['match_latitude'] = buildings['LATITUDE'].apply(lambda x: f'{x:.1f}')
 buildings['match_longitude'] = buildings['LONGITUDE'].apply(lambda x: f'{x:.1f}')
 buildings['match_countyCode_values'] = buildings[['countyfips_2010','countyfips_2022']].apply(lambda x: list(set(x)),axis=1)

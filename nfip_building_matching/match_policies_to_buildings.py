@@ -251,6 +251,7 @@ bad_geocode_records.to_parquet(outname)
 # (should already be present in building points dataset)
 policies['match_latitude'] = policies['latitude'].apply(lambda x: f'{x:.1f}')
 policies['match_longitude'] = policies['longitude'].apply(lambda x: f'{x:.1f}')
+policies['match_state'] = state
 policies['match_countyCode'] = policies['countyCode'].copy()
 policies['match_censusBlockGroupFips'] = policies['censusBlockGroupFips'].copy()
 policies['match_sfhaIndicator'] = policies['ratedFloodZone'].apply(is_sfha_zone)
@@ -310,6 +311,7 @@ for i,chunk in enumerate(chunks_to_process):
         
         matching_cols = ['match_latitude',
                          'match_longitude',
+                         'match_state',
                          'match_countyCode',
                          'match_censusBlockGroupFips',
                          'match_sfhaIndicator',
