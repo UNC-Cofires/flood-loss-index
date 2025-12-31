@@ -179,7 +179,8 @@ NFHL = NFHL[['FLD_ZONE','SFHA_TF','geometry']]
 print(f'Starting number of buildings: {len(buildings)}',flush=True)
 
 # Spatially join RPUs to buildings
-buildings = join_points_to_polygons(buildings,RPUs,max_dist=500)
+# (Select a large max distance since we want to associate all buildings with an RPU) 
+buildings = join_points_to_polygons(buildings,RPUs,max_dist=150000)
 
 # Spatially join HUC6 basins to buildings
 buildings = join_points_to_polygons(buildings,HUCs,max_dist=500)
