@@ -23,6 +23,32 @@ def sample_raster(filepath,xy_coords,band=1):
         
     return(values)
 
+def impute_missing_spatially(gdf,columns=None):
+    """
+    Impute missing values by copying from nearest non-missing neighbor.
+
+    param: gdf: geopandas geodataframe
+    param: columns: list of columns to spatially impute missing values for
+    """
+
+    # Assess all columns if not specified
+    if columns is None:
+        columns = gdf.columns
+
+    # Get list of columns with missing values
+    nan_columns = []
+    for column in columns:
+        if gdf[column].isna().sum() > 0:
+            nan_columns.append(column)
+
+    # Impute missing values based on nearest non-missing neighbor
+    for column in nan_columns:
+        m = gdf[column].isna()
+        imputed_values = gpd.sjoin_nearest(gdf[m][['geometry']],gdf[~m][[column,'geometry']],how='left')[column]
+        gdf.loc[imputed_values.index,column] = imputed_values
+
+    return(gdf)
+
 ### *** LOAD DATA SOURCES *** ###
 
 # Specify raster processing unit (RPU) of interest (passed as command-line argument)
@@ -62,8 +88,15 @@ xy_coords = structures.apply(lambda row: (row['x_epsg5070'],row['y_epsg5070']),a
 for filepath,variable in zip(raster_paths,raster_variables):
     print(variable,flush=True)
     structures[variable] = sample_raster(filepath,xy_coords)
-    
+
+### *** IMPUTE MISSING VALUES OF KEY ATTRIBUTES *** ###
+
+key_attributes=['nhd_catchment_comid','cora_shoreline_node']
+missing_mask = structures[key_attributes].isna().any(axis=1)
+structures['key_attributes_imputed'] = missing_mask.astype(int)
+structures = impute_missing_spatially(structures,columns=key_attributes)
+
 ### *** SAVE RESULTS *** ###
-structures = structures[['BUILD_ID']+raster_variables]
+structures = structures[['BUILD_ID','key_attributes_imputed']+raster_variables]
 outname = os.path.join(outfolder,f'{RPU}_raster_values_at_structure_points.parquet')
 structures.to_parquet(outname)
