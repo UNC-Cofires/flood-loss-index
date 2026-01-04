@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import dask.dataframe as dd
 import scipy.stats as stats
 import lightgbm as lgb
 from sklearn.linear_model import LogisticRegression
@@ -10,8 +11,50 @@ import os
 
 ### *** HELPER FUNCTIONS *** ###
 
-# Helper function to format elapsed time in seconds
+def downcast_floats(df,columns=None):
+    """
+    Helper function to convert float columns of dataframes from float64 to float32 to
+    save on memory. 
+
+    param: columns: subset of columns to apply function to. If none, will apply to all float columns in df. 
+    """
+    if columns is None:
+        columns = list(df.columns)
+
+    column_dtypes = df[columns].dtypes.astype('string')
+
+    for col in column_dtypes[column_dtypes.str.contains('float64')].index.values:
+        df[col] = df[col].astype('float32')
+
+    return df
+
+def harmonize_dtypes(df,columns=None):
+    """
+    Helper function to convert string and integer columns of dataframes to consistent data types. 
+
+    param: columns: subset of columns to apply function to. If none, will apply to all float columns in df. 
+    """
+
+    if columns is None:
+        columns = list(df.columns)
+
+    column_dtypes = df[columns].dtypes.astype('string')
+    
+    integer_column_mask = (column_dtypes.str.contains('int'))
+    string_column_mask = (column_dtypes.str.contains('string'))|(column_dtypes.str.contains('str'))|(column_dtypes.str.contains('object'))
+
+    for col in column_dtypes[integer_column_mask].index.values:
+        df[col] = df[col].astype('Int64')
+
+    for col in column_dtypes[string_column_mask].index.values:
+        df[col] = df[col].astype('string')
+
+    return df
+
 def format_elapsed_time(seconds):
+    """
+    Helper function to format elapsed time in seconds to HH:MM:SS. 
+    """
     seconds = int(np.round(seconds))
     hours = seconds // 3600
     seconds = seconds - hours*3600
@@ -28,27 +71,6 @@ def safe_logit(p,smallnum=1e-8):
     x = np.log(p/(1-p))
     return np.array(x)
 
-def normalize_weights(df,id_col='record_id',weight_col='weight',scale_col=None):
-    """
-    This function normalizes the weights assigned to potential building matches so that 
-    the weights associated with each insurance record sum to 1.0. 
-    
-    param: df: dataframe where each row represents a potential record-building matchhis 
-    param: id_col: name of column containing unique ID of each record. Can also be a list of column names. 
-    param: weight_col: name of column containing weight assigned to each building
-    param: scale_col: name of column containing values to scale normalized weight by. 
-                     (this allows us to normalize weights as if each group contained only 
-                     one record, and then can multiply weights by number of records in each 
-                     matching group.) 
-    """
-    
-    df[weight_col] = df.groupby(id_col)[weight_col].transform(lambda x: x / x.sum())
-
-    if scale_col is not None:
-        df[weight_col] *= df[scale_col]
-    
-    return(df)
-
 ### *** PROBABILITY CALIBRATION CLASS *** ###
 
 class PlattScalingCalibrator:
@@ -61,6 +83,10 @@ class PlattScalingCalibrator:
         self.beta1 = beta1
 
     def fit(self,p,y,sample_weight=None,smallnum=1e-9):
+        """
+        param: p: raw probability estimate of ML model [numpy array]
+        param: y: observed outcome in calibration set [numpy array]
+        """
 
         # Apply logit transform to raw probabilities
         x = safe_logit(p)
@@ -76,6 +102,11 @@ class PlattScalingCalibrator:
         self.beta1 = mod.coef_[0][0]
 
     def predict(self,raw_prob):
+        """
+        param: raw_prob: raw probability estimate of ML model [numpy array]
+        param: calibrated_prob: adjusted probability estimate transformed via Platt scaling
+        """
+        
         x = safe_logit(raw_prob)
         calibrated_prob = 1/(1+np.exp(-1*(self.beta0 + self.beta1*x)))
         return calibrated_prob
@@ -83,187 +114,127 @@ class PlattScalingCalibrator:
 ### *** FLOOD DAMAGE PREDICTION CLASS *** ###
 
 class FloodDamageProbabilityEstimator:
-
-    def __init__(self,
-                 candidate_df,
+    
+    def __init__(self,hyperparams,
                  outcome_variable,
                  features,
-                 hyperparams,
-                 record_id_col='RECORD_ID',
-                 building_id_col='BUILD_ID',
-                 block_id_col='SPATIAL_BLOCK_ID',
-                 weight_col='weight',
-                 prior_col='prior',
-                 scale_col=None):
+                 categorical_features=[],
+                 block_id_col='SPATIAL_BLOCK_ID'):
         """
-        param: candidate_df: building candidate data used for training [pandas dataframe]. Each row
-                        should represent a potential match between an insurance record (or group of 
-                        insurance records) and a building. By aggregating together insurance records 
-                        that share the same outcome and building candidates, we can save on memory and 
-                        computation time; however, doing this will require us to scale weights by the 
-                        number of records in each group. For more info, see notes on scale_col parameter. 
-                        
-        param: outcome_variable: name of binary variable representing presence or absence of flood damage [string]. 
-        
-        param: features: list of variables used to predict outcome [list of strings]. Please note that 
-                        categorical features should be saved as the pandas "category" dtype in the 
-                        train_candidate_df and test_candidate_df dataframes. 
-                         
         param: hyperparams: dictionary of hyperparameters to be used by LGBMClassifier [dict]. 
-        
-        param: record_id_col: name of variable that uniquely identifies each insurance record or group of 
-                        aggregated insurance records [string]. 
-                              
-        param: building_id_col: name of variable that uniquely identifies each building record. 
-        
+        param: outcome_variable: name of binary variable representing presence or absence of flood damage [string].
+        param: features: list of variables used to predict outcome [list of strings].
+        param: categorical_features: list of variables that are categorical [list of strings]. When fitting 
+                        and applying models to data, these variables should be cast as the pandas "category" 
+                        data type. 
         param: block_id_col: name of variable that identifies the spatial and/or temporal block that 
                         each building belongs to [string]. When fitting the model and calibrating 
                         probabilites, we'll do an inner cross-validation loop that utilizes blocked 
                         cross-validation. This helps to overcome issues related to spatial and/or 
                         temporal autocorrelation in the data. For more info, see doi:10.1111/ecog.02881. 
+         """
 
-        param: weight_col: name of variable corresponding to weight given to each building candidate. 
-                        This weight represents the probability that a specific insurance record was 
-                        generated by a specific building candidate. These weights will be iteratively
-                        updated using the EM algorithm. 
-
-        param: prior_col: name of variable representing the prior probability that a building candidate
-                        generated a specific insurance record before observing the outcome of that 
-                        insurance record (e.g., flooded or not flooded) [string]. Typically, our prior 
-                        belief will be that all building candidates are equally likely (uniform prior); 
-                        however, we could change this assumption by adjusting our priors to account 
-                        for insurance purchase behaviors (e.g., shabby houses less likely to be insured). 
-
-        param: scale_col: name of variable used to scale weights calculated for each building candidate [string]. 
-                        If similar insurance records have been aggregated together to save on memory and 
-                        computation time, then this should be equal to the number of records in each group.
-                        Otherwise, this should be set to none. 
-        """
-
-        self.candidate_df = candidate_df
+        # Save information on outcome variable and features
         self.outcome_variable = outcome_variable
         self.outcome_prob_variable = f'{outcome_variable}_prob'
         self.features = features
-
-        # Check that features and outcome variable are included in train and test data
-        check1 = all(f in self.candidate_df.columns for f in self.features)
-        check2 = self.outcome_variable in self.candidate_df.columns
-
-        if not check1&check2:
-            raise ValueError('Features and/or outcome variable are missing from the training data.')
-
-        # Get list of categorical features
-        self.feature_dtypes = self.candidate_df.dtypes[self.features]
-        self.categorical_features = self.feature_dtypes[self.feature_dtypes=='category'].index.to_list()
+        self.categorical_features = []
+        self.block_id_col = block_id_col
 
         # Save LGBMClassifier hyperparams
         self.hyperparams = hyperparams
         self.model = None
         self.calibrator = None
-        
-        # Check that parameters related to spatial blocking and candidate weighting are in dataset
-        param_names = ['Record ID','Building ID','Block ID','Weight','Prior']
-        param_values = [record_id_col,building_id_col,block_id_col,weight_col,prior_col]
 
-        if scale_col is not None:
-            param_names += ['Scale']
-            param_values += [scale_col]
+        # If the user has increased the amount of weight given to positive 
+        # training examples, keep track of this since it will affect how we
+        # evaluate performance in the inner CV loop. 
+        if 'scale_pos_weight' in self.hyperparams.keys():
+            self.scale_pos_weight = self.hyperparams['scale_pos_weight']
+        else:
+            self.scale_pos_weight = 1.0
 
-        for name,user_input in zip(param_names,param_values):
-            if user_input not in self.candidate_df.columns:
-                raise ValueError(f'{name} column \'{user_input}\' not found in training data.')
-        
-        # Now that we've checked the user input, save parameters related to spatial 
-        # blocking and candidate weighting.
-        self.record_id_col = record_id_col
-        self.building_id_col = building_id_col
-        self.block_id_col = block_id_col
-        self.weight_col = weight_col
-        self.prior_col = prior_col
-        self.scale_col = scale_col
-
-        # Normalize candidate weights once at start in case the user hasn't already done this
-        self.candidate_df = normalize_weights(self.candidate_df,id_col=self.record_id_col,weight_col=self.weight_col,scale_col=self.scale_col)
-
-        return(None)
-
-    def fit_probabilities(self,num_samples=2000000,num_calibration_folds=5,t0=None):
+    def fit_probabilities(self,data,num_calibration_folds=5,t0=None):
         """
         This function fits an LGBMClassifier model to the data while using an inner
         cross-validation loop to calibrate flood damage probability projections. 
 
-        param: num_samples: number of samples to draw from candidate_df [integer]. Each
-                        sample can be thought of as a monte-carlo assignment of an 
-                        insurance record to a building candidate. Samples are drawn 
-                        according to building candidate weights (i.e., more likely 
-                        candidates are more likely to be selected). The total amount
-                        of computation time required to fit the model depends strongly 
-                        on this parameter. 
+        param: data: pandas dataframe containing data used for model fitting. Must contain 
+                        columns corresponding to outcome_variable, features, and 
+                        block_id_col attributes. 
         param: num_calibration_folds: number of inner cross-validation folds to use when 
                         calibrating predicted probabilities to data. 
         param: t0: time since start of process [float]. Encoded as # seconds since Unix epoch. 
                         Users can pass this as an argument if the function call is part of a 
                         larger workflow. 
         """
-        
+
+        # If the user hasn't already done so, start counting time. 
         if t0 is None:
             t0 = time.time()
 
-        # Samples from buildings candidates according to candidate weight 
-        train_df = self.candidate_df.sample(num_samples,replace=True,weights=self.weight_col).reset_index(drop=True)
+        # Set up inner spatial and/or temporal block CV loop that we'll use to calibrate probabilites 
+        block_cv_folds = pd.DataFrame(data[self.block_id_col].unique(),columns=[self.block_id_col])
+        block_cv_folds['fold'] = np.random.randint(num_calibration_folds,size=len(block_cv_folds))
+        data = pd.merge(data,block_cv_folds,on=self.block_id_col,how='left')
 
-        # Set up inner CV loop that we'll use to calibrate probabilites 
-        spatial_folds = pd.DataFrame(train_df[self.block_id_col].unique(),columns=[self.block_id_col])
-        spatial_folds['fold'] = np.random.randint(num_calibration_folds,size=len(spatial_folds))
-        train_df = pd.merge(train_df,spatial_folds,on=self.block_id_col)
-        
-        train_df[self.outcome_prob_variable] = np.nan
+        # Initialize column that we'll use to keep track of predicted probabilities
+        data[self.outcome_prob_variable] = np.nan
 
-        # Within each loop, keep track of n_estimators. Important 
-        # for preventing overfitting when we give the model all the data. 
+        # Create weights for eval_set that reflect the degree to which the 
+        # user has scaled the weight of positive examples. 
+        # (only matters if scale_pos_weight was explicitly passed as a hyperparameter) 
+        data['eval_sample_weight'] = np.where(data[self.outcome_variable]==1, self.scale_pos_weight, 1.0)
+
+        # Within each loop, keep track of n_estimators. 
+        # This is important for preventing overfitting in final step 
+        # where we fit to all the data. 
         best_iteration_list = []
 
-        # CV loop 
+        # Inner CV loop 
         for fold in range(num_calibration_folds):
 
             t1 = time.time()
         
-            print(f'\n\n*** CALIBRATION FOLD {fold+1} / {num_calibration_folds} ***\n\n')
+            print(f'\n\n*** CALIBRATION FOLD {fold+1} / {num_calibration_folds} ***\n',flush=True)
             
-            fold_mask = (train_df['fold']==fold)
+            fold_mask = (data['fold']==fold)
             
             model = lgb.LGBMClassifier(**self.hyperparams)
             
             callbacks=[lgb.early_stopping(stopping_rounds=50,min_delta=1e-5),
                        lgb.log_evaluation(period=50)]
             
-            model.fit(train_df[~fold_mask][self.features],
-                      train_df[~fold_mask][self.outcome_variable],
+            model.fit(data[~fold_mask][self.features],
+                      data[~fold_mask][self.outcome_variable],
                       feature_name=self.features,
                       categorical_feature=self.categorical_features,
-                      eval_set=[(train_df[fold_mask][self.features], train_df[fold_mask][self.outcome_variable])],
+                      eval_set=[(data[fold_mask][self.features], data[fold_mask][self.outcome_variable])],
+                      eval_sample_weight=[data[fold_mask]['eval_sample_weight']],
                       eval_metric="binary_logloss",
                       callbacks=callbacks)
         
             best_iteration_list.append(model.best_iteration_)
             
-            train_df.loc[fold_mask,self.outcome_prob_variable] = model.predict_proba(train_df[fold_mask][features])[:,1]
+            data.loc[fold_mask,self.outcome_prob_variable] = model.predict_proba(data[fold_mask][self.features])[:,1]
 
             t2 = time.time()
             
             elapsed_time = format_elapsed_time(t2-t1)
             cumulative_elapsed_time = format_elapsed_time(t2-t0)
 
-            print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative')
+            print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative',flush=True)
         
-        print(f'\n\n*** CALIBRATING PROBABILITIES ***\n\n',flush=True)
+        print(f'\n\n*** CALIBRATING PROBABILITIES ***\n',flush=True)
 
         t1 = time.time()
         
-        # Use platt scaling to correct for systemic 
-        # over- or underestimation of probabilities
+        # Use platt scaling to correct for systemic over- or underestimation of probabilities. 
+        # This step is particularly important if the user has increased the weight given to 
+        # rare positive examples when training the LGBMClassifier, as the raw probabilities 
+        # will be biased. 
         calibrator = PlattScalingCalibrator()
-        calibrator.fit(train_df[self.outcome_prob_variable],train_df[self.outcome_variable])
+        calibrator.fit(data[self.outcome_prob_variable],data[self.outcome_variable])
         self.calibrator = calibrator
 
         print(f'Platt scaling parameters: beta0 = {calibrator.beta0:.3f}, beta1 = {calibrator.beta1:.3f}',flush=True)
@@ -273,9 +244,9 @@ class FloodDamageProbabilityEstimator:
         elapsed_time = format_elapsed_time(t2-t1)
         cumulative_elapsed_time = format_elapsed_time(t2-t0)
 
-        print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative')
+        print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative',flush=True)
         
-        print(f'\n\n*** POST-CALIBRATION MODEL FITTING ***\n\n',flush=True)
+        print(f'\n\n*** POST-CALIBRATION MODEL FITTING ***\n',flush=True)
 
         t1 = time.time()
         
@@ -284,8 +255,8 @@ class FloodDamageProbabilityEstimator:
         model = lgb.LGBMClassifier(**self.hyperparams)
         model.n_estimators = n_estimators
         
-        model.fit(train_df[self.features],
-                  train_df[self.outcome_variable],
+        model.fit(data[self.features],
+                  data[self.outcome_variable],
                   feature_name=self.features,
                   categorical_feature=self.categorical_features)
 
@@ -296,14 +267,14 @@ class FloodDamageProbabilityEstimator:
         elapsed_time = format_elapsed_time(t2-t1)
         cumulative_elapsed_time = format_elapsed_time(t2-t0)
 
-        print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative')
+        print(f'\nTIME ELAPSED: {elapsed_time} last iteration / {cumulative_elapsed_time} cumulative',flush=True)
 
         return(None)
 
     def predict_probabilities(self,data):
         """
         param: data: data on which to to predict probabilities [pandas dataframe]. Must follow same 
-                        format as candidate_df. 
+                        format as data used to fit model. 
         returns: calibrated_prob: predicted probability of flood damage. 
         """
 
@@ -311,76 +282,6 @@ class FloodDamageProbabilityEstimator:
         calibrated_prob = self.calibrator.predict(raw_prob)
         
         return(calibrated_prob)
-
-    def EM_iteration(self,num_samples=2000000,t0=None):
-        """
-        This function updates building candidate weights and model parameters
-        using the expectation-maximization (EM) algorithm. 
-
-        param: num_samples: number of samples to draw from candidate_df [integer]. Each
-                        sample can be thought of as a monte-carlo assignment of an 
-                        insurance record to a building candidate. Samples are drawn 
-                        according to building candidate weights (i.e., more likely 
-                        candidates are more likely to be selected). The total amount
-                        of computation time required to fit the model depends strongly 
-                        on this parameter. 
-        param: t0: time since start of process [float]. Encoded as # seconds since Unix epoch. 
-                        Users can pass this as an argument if the function call is part of 
-                        a larger workflow. 
-        """
-
-        ## Initialization
-        if t0 is None:
-            t0 = time.time()
-
-        # Small number to avoid machine precision issues
-        smallnum=1e-8
-
-        # Fit model using starting values of weights
-        # (Can skip this step if the model has already been fit) 
-        if self.model is None:
-            self.fit_probabilities(num_samples=num_samples,t0=t0)
-
-        # Get prior probabilities
-        prior = self.candidate_df[self.prior_col].to_numpy()
-
-        ## E-step: Update candidate weights
-
-        print('\n\n### --------- START OF EM ITERATION --------- ###\n\n',flush=True)
-
-        t1 = time.time()
-    
-        # Compute likelihood of observed outcomes at each building candidate
-        # based on current values of model parameters. 
-        y = self.candidate_df[self.outcome_variable]
-        p = self.predict_probabilities(self.candidate_df)        
-        likelihood = stats.bernoulli.pmf(y,p)
-    
-        # Update weights using Bayes rule (Posterior ~ Likelihood x Prior)
-        # Add tiny number to avoid issues related to machine precision
-        self.candidate_df[self.weight_col] = likelihood*prior + smallnum
-        self.candidate_df = normalize_weights(self.candidate_df,id_col=self.record_id_col,weight_col=self.weight_col,scale_col=self.scale_col)
-
-        t2 = time.time()
-
-        estep_elapsed_time = format_elapsed_time(t2-t1)
-        
-        ## M-step: Update model parameters
-
-        t1 = time.time()
-    
-        # Re-fit the model using new weights
-        self.fit_probabilities(num_samples=num_samples,t0=t0)
-
-        t2 = time.time()
-
-        mstep_elapsed_time = format_elapsed_time(t2-t1)
-        cumulative_elapsed_time = format_elapsed_time(t2-t0)
-
-        print('\n\n### --------- END OF EM ITERATION --------- ###',flush=True)
-        print(f'\nTIME ELAPSED: {estep_elapsed_time} E-step / {mstep_elapsed_time} M-step / {cumulative_elapsed_time} cumulative')
-
-        return(None)
 
 ### *** INITIAL SETUP *** ###
 
@@ -412,31 +313,56 @@ event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE'])
 training_event_catalog = event_catalog[event_catalog['EVENT_NUMBER'].isin(training_event_numbers)]
 validation_event_info = event_catalog[event_catalog['EVENT_NUMBER']==validation_event_number].iloc[0]
 
-# (!) Remove once debugged (initially train on just the big ones)
+# (!) Remove once finalized (initially train on just the big ones)
 training_event_catalog = training_event_catalog[training_event_catalog['NUM_CLAIMS']>= 500]
-included_event_numbers = np.concatenate((training_event_catalog['EVENT_NUMBER'].to_numpy(),[validation_event_number]))
+included_event_numbers = np.concatenate((training_event_catalog['EVENT_NUMBER'].to_numpy(),[validation_event_number])).tolist()
 
 print('\n*** TROPICAL CYCLONE EVENT USED FOR VALIDATION ***\n')
 print(validation_event_info,flush=True)
 
 ### *** LOAD DATA *** ###
 
-## Presence-absence information derived from anonymized NFIP records
-presence_absence_data_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/presence_absence_data/presence_absence_summary.parquet'
-filters = [('EVENT_NUMBER','in',included_event_numbers)]
-presence_absence_data = pd.read_parquet(presence_absence_data_path,filters=filters)
-included_match_keys = presence_absence_data['match_key'].unique()
+## Stochastically-assigned presence-absence points derived from NFIP records
 
-## Building candidates
-building_lookup_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/potential_matches/CONUS_nfip_matching_building_lookup.parquet'
-filters = [('match_key','in',included_match_keys)]
-building_lookup = pd.read_parquet(building_lookup_path,filters=filters)
+presence_absence_dir = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/presence_absence_data/stochastic_assignment'
+presence_absence_filepaths = [os.path.join(presence_absence_dir,f'event_{event_number:04d}_building_assignments.parquet') for event_number in included_event_numbers]
+
+# Stochastic assignment was repeated multiple times
+# Specify how many realizations to include 
+num_replicates = 1
+filters = [('replicate','<=',num_replicates)]
+
+# Read in data as a dask dataframe 
+presence_absence_data = dd.concat([dd.read_parquet(filepath,filters=filters) for filepath in presence_absence_filepaths]).reset_index(drop=True)
+presence_absence_data = harmonize_dtypes(presence_absence_data)
+
+## Structure attributes
+# (Mainly interested in coordinates so that we can create spatial blocks for inner CV loop) 
+
+included_counties_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/included_county_GEOIDs.txt'
+included_counties = np.loadtxt(included_counties_path,dtype='str').tolist()
+
+structure_info_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/structure_info/CONUS_structure_info.parquet'
+filters = [('countyfips_2010','in',included_counties)]
+usecols = ['BUILD_ID','LATITUDE','LONGITUDE','x_epsg5070','y_epsg5070','countyfips_2010']
+structure_info = dd.read_parquet(structure_info_path,columns=usecols,filters=filters)
+
+# Specify size of blocks to use in spatial block CV, and create a unique block ID
+block_size = 2000
+structure_info['x_block'] = block_size*(structure_info['x_epsg5070'] / block_size).round()
+structure_info['y_block'] = block_size*(structure_info['y_epsg5070'] / block_size).round()
+structure_info['SPATIAL_BLOCK_ID'] = '(' + structure_info['x_block'].map('{:.1f}'.format,meta=('x_block','string[pyarrow]')) + ',' + structure_info['y_block'].map('{:.1f}'.format,meta=('y_block','string[pyarrow]')) + ')'
+structure_info = structure_info.drop(columns=['x_block','y_block'])
+
+structure_info = downcast_floats(structure_info)
+structure_info = harmonize_dtypes(structure_info)
 
 ## Topographic features
-included_RPUs = ['03a','03b','03c','03d','03e','03f'] # (!) expand once debugged. 
+
+included_RPUs = ['03a','03b','03c','03d','03e','03f'] # (!) expand once finalized. 
 raster_dir = '/proj/characklab/projects/kieranf/flood_damage_index/data/rasters'
 raster_filepaths = [os.path.join(raster_dir,f'{RPU}/{RPU}_raster_values_at_structure_points.parquet') for RPU in included_RPUs]
-topo_data = pd.concat([pd.read_parquet(filepath) for filepath in raster_filepaths]).reset_index(drop=True)
+topo_data = dd.concat([dd.read_parquet(filepath) for filepath in raster_filepaths]).reset_index(drop=True)
 topo_data['nhd_catchment_comid'] = topo_data['nhd_catchment_comid'].astype('int64[pyarrow]')
 topo_data['cora_shoreline_node'] = topo_data['cora_shoreline_node'].astype('int64[pyarrow]')
 
@@ -449,12 +375,14 @@ topo_features = ['key_attributes_imputed',
                  'tpi_cm']
 
 topo_data = topo_data[['BUILD_ID','nhd_catchment_comid','cora_shoreline_node']+topo_features]
+topo_data = downcast_floats(topo_data)
+topo_data = harmonize_dtypes(topo_data)
 
 ## Precipitation intensity
+
 precip_filepath = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/rainfall_runoff/precip_by_event/combined_precip_by_event.parquet'
 filters = [('EVENT_NUMBER','in',included_event_numbers)]
-precip_data = pd.read_parquet(precip_filepath,filters=filters)
-precip_data.rename(columns={'comid':'nhd_catchment_comid'},inplace=True)
+precip_data = dd.read_parquet(precip_filepath,filters=filters).rename(columns={'comid':'nhd_catchment_comid'})
 
 precip_features = ['C24_area_sqkm',
                    'C24_API120_mm',
@@ -466,120 +394,53 @@ precip_features = ['C24_area_sqkm',
                    'C24_MAI72_mmhr']
 
 precip_data = precip_data[['EVENT_NUMBER','nhd_catchment_comid']+precip_features]
+precip_data = downcast_floats(precip_data)
+precip_data = harmonize_dtypes(precip_data)
 
 ## Storm surge
 
 storm_surge_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/storm_surge/CORA_max_zeta_by_event/max_zeta_by_event.parquet'
-storm_surge_data = pd.read_parquet(storm_surge_path).rename(columns={'nodenum':'cora_shoreline_node'})
+storm_surge_data = dd.read_parquet(storm_surge_path).rename(columns={'nodenum':'cora_shoreline_node'})
 
 storm_surge_features = ['max_zeta_over_threshold']
 
 storm_surge_data = storm_surge_data[['EVENT_NUMBER','cora_shoreline_node']+storm_surge_features]
+storm_surge_data = downcast_floats(storm_surge_data)
+storm_surge_data = harmonize_dtypes(storm_surge_data)
 
-## Structure coordinates 
+### *** MERGE DATA *** ###
 
-structure_info_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/nfip_building_matching/structure_info/CONUS_structure_info.parquet'
-filters = [('state','in',building_lookup['state'].unique())]
-usecols = ['BUILD_ID','LATITUDE','LONGITUDE','x_epsg5070','y_epsg5070']
-structure_info = pd.read_parquet(structure_info_path,columns=usecols,filters=filters)
-
-# Specify size of blocks to use in spatial block CV, and create a unique block ID
-block_size = 2000
-structure_info['x_block'] = np.round(structure_info['x_epsg5070'] / block_size)*block_size
-structure_info['y_block'] = np.round(structure_info['y_epsg5070'] / block_size)*block_size
-structure_info['SPATIAL_BLOCK_ID'] = '(' + structure_info['x_block'].map('{:.1f}'.format) + ',' + structure_info['y_block'].map('{:.1f}'.format) + ')'
-structure_info.drop(columns=['x_block','y_block'],inplace=True)
-
-# Attach information to building lookup table
-building_lookup = pd.merge(building_lookup,structure_info,on='BUILD_ID',how='left')
-
-### *** PREPROCESS DATA *** ###
-
-## Create dataframe listing potential outcomes of each building candidate
-
-# Make sure identifier columns are encoded correctly
-presence_absence_data['match_key'] = presence_absence_data['match_key'].astype('string[pyarrow]')
-building_lookup['match_key'] = building_lookup['match_key'].astype('string[pyarrow]')
-
-# Create a unique identifier representing group used to create presence absence counts
-presence_absence_data['PA_GROUP_ID'] = np.arange(len(presence_absence_data))+1
-
-# Change format of data from wide to long. 
-# Create indicator denoting positive (flood presence) and negative (flood absence) potential outcomes. 
-positive_outcomes = presence_absence_data[['EVENT_NUMBER','PA_GROUP_ID','match_key','num_buildings','num_presence']].rename(columns={'num_presence':'num_records'})
-positive_outcomes['flooded'] = 1
-negative_outcomes = presence_absence_data[['EVENT_NUMBER','PA_GROUP_ID','match_key','num_buildings','num_absence']].rename(columns={'num_absence':'num_records'})
-negative_outcomes['flooded'] = 0
-
-candidate_df = pd.concat([positive_outcomes,negative_outcomes]).sort_values(by=['EVENT_NUMBER','PA_GROUP_ID','flooded'])
-
-# Drop potential outcomes that have no associated insurance records
-# (The "weight" given to these will always be zero, so no point to include them) 
-candidate_df = candidate_df[candidate_df['num_records'] > 0].reset_index(drop=True)
-
-# Create unique identifier denoting unique record groups 
-# (e.g., flooded insurance records from a specific census block + storm) 
-candidate_df['RECORD_GROUP_ID'] = candidate_df['PA_GROUP_ID'].astype(str) + '_' + candidate_df['flooded'].astype(str)
-
-# Add building information
-candidate_df = pd.merge(candidate_df,building_lookup[['match_key','BUILD_ID','LATITUDE','LONGITUDE','SPATIAL_BLOCK_ID']],on='match_key',how='left')
-candidate_df = candidate_df[['EVENT_NUMBER','PA_GROUP_ID','RECORD_GROUP_ID','BUILD_ID','LATITUDE','LONGITUDE','SPATIAL_BLOCK_ID','match_key','num_buildings','num_records','flooded']]
-
-# Add columns that we'll use to calculate weight given to soft labels
-# (these will be used by EM algorithm to adjust weights given to building 
-# candidates conditional on the observed outcome of insurance records) 
-candidate_df['prior'] = 1/candidate_df['num_buildings']
-candidate_df['likelihood'] = np.nan
-candidate_df['weight'] = candidate_df['prior'].copy() # Set initial value of weights equal to prior
-
-# Normalize weights so that sum of building weights within each candidate group is equal to 
-# the number of insurance records associated with that candidate group
-# (equivalent to saying that candidate weights for each record must sum to 1.0) 
-candidate_df = normalize_weights(candidate_df,id_col='RECORD_GROUP_ID',weight_col='weight',scale_col='num_records')
-
-## Add features to dataframe 
-
-# Make sure identifier columns are encoded correctly and consistently
-candidate_df['EVENT_NUMBER'] = candidate_df['EVENT_NUMBER'].astype('int64[pyarrow]')
-candidate_df['BUILD_ID'] = candidate_df['BUILD_ID'].astype('string[pyarrow]')
-
-topo_data['BUILD_ID'] = topo_data['BUILD_ID'].astype('string[pyarrow]')
-topo_data['nhd_catchment_comid'] = topo_data['nhd_catchment_comid'].astype('int64[pyarrow]')
-topo_data['cora_shoreline_node'] = topo_data['cora_shoreline_node'].astype('int64[pyarrow]')
-
-precip_data['EVENT_NUMBER'] = precip_data['EVENT_NUMBER'].astype('int64[pyarrow]')
-precip_data['nhd_catchment_comid'] = precip_data['nhd_catchment_comid'].astype('int64[pyarrow]')
-
-storm_surge_data['EVENT_NUMBER'] = storm_surge_data['EVENT_NUMBER'].astype('int64[pyarrow]')
-storm_surge_data['cora_shoreline_node'] = storm_surge_data['cora_shoreline_node'].astype('int64[pyarrow]')
+# Attach data on structure attributes (static)
+presence_absence_data = dd.merge(presence_absence_data,structure_info,on='BUILD_ID',how='left')
 
 # Attach data on topographic attributes (static)
-candidate_df = pd.merge(candidate_df,topo_data,on='BUILD_ID',how='left')
+presence_absence_data = dd.merge(presence_absence_data,topo_data,on='BUILD_ID',how='left')
 
 # Attach data on precipitation intensity (dynamic) 
-candidate_df = pd.merge(candidate_df,precip_data,on=['EVENT_NUMBER','nhd_catchment_comid'],how='left')
+presence_absence_data = dd.merge(presence_absence_data,precip_data,on=['EVENT_NUMBER','nhd_catchment_comid'],how='left')
 
 # Attach data on storm surge conditions (dynamic) 
-candidate_df = pd.merge(candidate_df,storm_surge_data,on=['EVENT_NUMBER','cora_shoreline_node'],how='left')
+presence_absence_data = dd.merge(presence_absence_data,storm_surge_data,on=['EVENT_NUMBER','cora_shoreline_node'],how='left')
 
-## Get list of features to use in model
+# Get list of features to use in model
 features = topo_features + precip_features + storm_surge_features
 
-# Specify categorical features
+# Specify whether any features represent categorical (as opposed to numeric) variables
 categorical_features = ['geomorphon']
-for feature in categorical_features:
-   candidate_df[feature] = candidate_df[feature].astype('category')
 
-# Downcast float64 to float32 to save on memory
-feature_data_types = candidate_df[features].dtypes
-for feature in feature_data_types[feature_data_types == 'float64'].index.values:
-    candidate_df[feature] = candidate_df[feature].astype('float32')
+for feature in categorical_features:
+    presence_absence_data[feature] = presence_absence_data[feature].astype('category')
+
 
 ### *** CROSS VALIDATION *** ###
 
+# Assemble dataset into local memory as a pandas dataframe 
+presence_absence_data = presence_absence_data.compute()
+
+# Specify hyperparameters
 hyperparams = {'objective':'binary',
                'learning_rate':0.05,
-               'n_estimators':1000,
+               'n_estimators':2000,
                'num_leaves':31,
                'max_depth':6,
                'min_child_samples':200,
@@ -592,39 +453,44 @@ hyperparams = {'objective':'binary',
                'cat_smooth':10,
                'n_jobs':n_cores}
 
-test_mask = (candidate_df['EVENT_NUMBER'] == validation_event_number)
+# Split into train / test set
+test_mask = (presence_absence_data['EVENT_NUMBER'] == validation_event_number)
 train_mask = ~test_mask
 
-mod = FloodDamageProbabilityEstimator(candidate_df[train_mask],
+# Initialize model 
+mod = FloodDamageProbabilityEstimator(hyperparams,
                                       'flooded',
                                       features,
-                                      hyperparams,
-                                      record_id_col='RECORD_GROUP_ID',
-                                      building_id_col='BUILD_ID',
-                                      block_id_col='SPATIAL_BLOCK_ID',
-                                      weight_col='weight',
-                                      prior_col='prior',
-                                      scale_col='num_records')
+                                      categorical_features=categorical_features,
+                                      block_id_col='SPATIAL_BLOCK_ID')
 
-mod.fit_probabilities(num_samples=50000000)
+# Fit model to training data
+mod.fit_probabilities(presence_absence_data[train_mask])
 
-test_candidate_df = candidate_df[test_mask].copy()
-test_candidate_df[mod.outcome_prob_variable] = mod.predict_probabilities(test_candidate_df)
+# Apply to testing data
+test_data = presence_absence_data[test_mask]
+test_data[mod.outcome_prob_variable] = mod.predict_probabilities(test_data)
 
 ### *** SAVE RESULTS *** ###
 
-# Data
-outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_test_data.parquet')
-test_candidate_df.to_parquet(outname)
+# Test data 
+outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_sampled_test_data.parquet')
+test_data.to_parquet(outname)
+
+# Fitted FloodDamageProbabilityEstimator 
+outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_FloodDamageProbabilityEstimator.pickle')
+with open(outname,'wb') as f:
+    pickle.dump(mod,f)
+    f.close()
 
 # Fitted LGBMClassifier 
-outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_LightGBM_model.pickle')
+outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_LGBMClassifier.pickle')
 with open(outname,'wb') as f:
     pickle.dump(mod.model,f)
     f.close()
 
 # Fitted calibrator 
-outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_calibrator.pickle')
+outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_PlattScalingCalibrator.pickle')
 with open(outname,'wb') as f:
     pickle.dump(mod.calibrator,f)
     f.close()

@@ -2,30 +2,6 @@ import numpy as np
 import pandas as pd
 import os
 
-### *** HELPER FUNCTIONS *** ###
-
-def create_records_from_group_counts(row):
-    """
-    This function creates a record-level dataset based on the number of 
-    presence and absence points in a given group defined by match_key. 
-
-    param: row: row of combined_group_counts dataframe (see rest of script) 
-    param: df: record-level representation of data
-    """
-
-    N = row['num_presence'] + row['num_absence']
-    
-    flooded_arr = np.zeros(N,dtype='int64')
-    flooded_arr[:row['num_presence']] = 1
-
-    df = pd.DataFrame(data={'EVENT_NUMBER':row['EVENT_NUMBER'],
-                            'RECORD_ID':pd.NA,
-                            'match_key':row['match_key'],
-                            'num_matches':row['num_buildings'],
-                            'flooded':flooded_arr})
-    
-    return(df)
-
 ### *** INITIAL SETUP *** ###
 
 pwd = os.getcwd()
@@ -153,17 +129,7 @@ for event_number in post_2009_event_numbers:
 
 combined_group_counts = pd.concat(group_counts_list).reset_index(drop=True)
 
-### *** CREATE RECORD-LEVEL VERSION OF DATA *** ###
-
-record_df = pd.concat([create_records_from_group_counts(row) for i, row in combined_group_counts.iterrows()])
-record_df = record_df.sort_values(by='EVENT_NUMBER').reset_index(drop=True)
-record_df['RECORD_ID'] = (record_df.groupby('EVENT_NUMBER')['RECORD_ID'].cumcount() + 1).astype(str)
-record_df['RECORD_ID'] = 'E' + record_df['EVENT_NUMBER'].astype(str) + '_R' + record_df['RECORD_ID']
-
 ### *** SAVE RESULTS *** ###
 
 outname = os.path.join(outfolder,'presence_absence_summary.parquet')
 combined_group_counts.to_parquet(outname)
-
-outname = os.path.join(outfolder,'presence_absence_records.parquet')
-record_df.to_parquet(outname)
