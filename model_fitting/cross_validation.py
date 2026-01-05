@@ -390,7 +390,6 @@ precip_features = ['C24_area_sqkm',
                    'C24_MAI6_mmhr',
                    'C24_MAI12_mmhr',
                    'C24_MAI24_mmhr',
-                   'C24_MAI48_mmhr',
                    'C24_MAI72_mmhr']
 
 precip_data = precip_data[['EVENT_NUMBER','nhd_catchment_comid']+precip_features]
@@ -422,20 +421,19 @@ presence_absence_data = dd.merge(presence_absence_data,precip_data,on=['EVENT_NU
 # Attach data on storm surge conditions (dynamic) 
 presence_absence_data = dd.merge(presence_absence_data,storm_surge_data,on=['EVENT_NUMBER','cora_shoreline_node'],how='left')
 
-# Get list of features to use in model
-features = topo_features + precip_features + storm_surge_features
-
 # Specify whether any features represent categorical (as opposed to numeric) variables
 categorical_features = ['geomorphon']
 
 for feature in categorical_features:
     presence_absence_data[feature] = presence_absence_data[feature].astype('category')
 
+# Assemble dataset into local memory as a pandas dataframe 
+presence_absence_data = presence_absence_data.compute()
 
 ### *** CROSS VALIDATION *** ###
 
-# Assemble dataset into local memory as a pandas dataframe 
-presence_absence_data = presence_absence_data.compute()
+# Get list of features to use in model
+features = topo_features + precip_features + storm_surge_features
 
 # Specify hyperparameters
 hyperparams = {'objective':'binary',
@@ -481,16 +479,4 @@ test_data.to_parquet(outname)
 outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_FloodDamageProbabilityEstimator.pickle')
 with open(outname,'wb') as f:
     pickle.dump(mod,f)
-    f.close()
-
-# Fitted LGBMClassifier 
-outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_LGBMClassifier.pickle')
-with open(outname,'wb') as f:
-    pickle.dump(mod.model,f)
-    f.close()
-
-# Fitted calibrator 
-outname = os.path.join(outfolder,f'event_{validation_event_number:04d}_PlattScalingCalibrator.pickle')
-with open(outname,'wb') as f:
-    pickle.dump(mod.calibrator,f)
     f.close()

@@ -8,7 +8,7 @@
 #SBATCH --mail-type=all
 #SBATCH --job-name=cross_val
 #SBATCH --mail-user=kieranf@email.unc.edu
-#SBATCH --array=63,71
+#SBATCH --array=63,71,99,67
 
 module purge
 module load anaconda
