@@ -15,5 +15,5 @@ export PYTHONWARNINGS="ignore"
 
 conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
 
-# average 24-hour precipitation intensity with return period of 2 years
+# Average 24-hour precipitation intensity with return period of 2 years
 python3.12 extreme_precip_analysis.py 24 2

@@ -112,7 +112,7 @@ if not os.path.exists(outfolder):
 duration = int(sys.argv[1])
 return_period = float(sys.argv[2])
 
-print(f'Calculating maximum average {duration}-hour precipitation intensity with return period of {return_period:.1f} years.',flush=True)
+print(f'Calculating average {duration}-hour precipitation intensity with return period of {return_period:.1f} years.',flush=True)
 
 # Path to NOAA Analysis of Record for Calibration (AORC) data
 # Available at: https://registry.opendata.aws/noaa-nws-aorc/
