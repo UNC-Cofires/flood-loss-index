@@ -73,7 +73,7 @@ def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_ye
         
         annual_maxima_list.append(max_intensity)
 
-    annual_maxima = xr.concat(annual_maxima_list,dim='year')
+    annual_maxima = xr.concat(annual_maxima_list,dim='year').chunk({'year':-1})
     
     return annual_maxima
 
@@ -109,7 +109,7 @@ def extreme_value_analysis(annual_maxima,return_period=2.0,c_guess=0.0):
 pwd = os.getcwd()
 
 # Get values of command-line arguments 
-RPU = sys.argv[1]
+RPU = sys.argv[1]                      # Raster processing unit of interest
 duration = int(sys.argv[2])            # Duration of interest [hours]
 return_period = float(sys.argv[3])     # Return period of interest [years]
 
@@ -135,17 +135,18 @@ AORC_dir = '/proj/characklab/projects/kieranf/flood_damage_index/data/AORC/'
 # Extract timeseries of annual maximum precipitation intensity
 annual_maxima = AORC_annual_max_precip_intensity(AORC_dir,duration=duration,bbox=bbox)
 
-# Assemble into local memory 
-annual_maxima = annual_maxima.compute()
-
 print(f'Estimating {duration}-hour precipitation intensity with return period of {return_period:.1f} years.',flush=True)
 
 # Calculate precipitation intensity associated with return period of interest
 rp_intensity = xr.apply_ufunc(extreme_value_analysis,
                               annual_maxima,
                               kwargs={'return_period':return_period},
-                              input_core_dims=[['year']], 
+                              input_core_dims=[['year']],
+                              dask='parallelized',
                               vectorize=True)
+
+# Assemble final result into local memory
+rp_intensity = rp_intensity.compute()
 
 ### *** EXPORT RESULTS *** ###
 
