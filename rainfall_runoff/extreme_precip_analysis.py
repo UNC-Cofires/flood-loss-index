@@ -48,8 +48,12 @@ def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_ye
         sample_points = False
         sample_bbox = False
 
-    # Read in AORC data from each year
+    # Specify chunksize that xarray should use.
+    # Since we are calculating annual maxima, we should chunk things 
+    # up spatially and leave the time dimension intact. 
+    chunks={'latitude':50,'longitude':50,'time':-1}
     
+    # Read in AORC data from each year
     annual_maxima_list = []
     
     for year in np.arange(start_year,end_year+1):
@@ -59,12 +63,14 @@ def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_ye
         if sample_points:
             gridded_data = xr.open_zarr(gridded_data_path).sel(latitude=lats,longitude=lons,method='nearest')
         elif sample_bbox:
-            gridded_data = xr.open_zarr(gridded_data_path).sel(latitude=slice(min_lat,max_lat),longitude=slice(min_lon,max_lon))
+            gridded_data = xr.open_zarr(gridded_data_path).sel(latitude=slice(min_lat,max_lat),longitude=slice(min_lon,max_lon)).chunk(chunks)
         else:
-            gridded_data = xr.open_zarr(gridded_data_path)
+            gridded_data = xr.open_zarr(gridded_data_path).chunk(chunks)
         
         max_intensity = gridded_data['APCP_surface'].rolling(time=duration).mean().max(dim='time')
         max_intensity = max_intensity.expand_dims(dim='year').assign_coords(year=('year', [year]))
+        max_intensity = max_intensity.astype('float32')
+        
         annual_maxima_list.append(max_intensity)
 
     annual_maxima = xr.concat(annual_maxima_list,dim='year')
@@ -89,7 +95,7 @@ def extreme_value_analysis(annual_maxima,return_period=2.0,c_guess=0.0):
     c, loc, scale = stats.genextreme.fit(annual_maxima,c_guess)
     distribution = stats.genextreme(c=c,loc=loc,scale=scale)
 
-    # Calculate exceedence probability associated with return period
+    # Calculate exceedence probability associated with return period of interest
     exceedance_prob = 1/return_period
 
     # Use inverse CDF transform to get value associated with 
@@ -102,33 +108,44 @@ def extreme_value_analysis(annual_maxima,return_period=2.0,c_guess=0.0):
 
 pwd = os.getcwd()
 
+# Get values of command-line arguments 
+RPU = sys.argv[1]
+duration = int(sys.argv[2])            # Duration of interest [hours]
+return_period = float(sys.argv[3])     # Return period of interest [years]
+
 # Create folder for output
-outfolder = os.path.join(pwd,'extreme_values')
+outfolder = os.path.join(pwd,f'extreme_values/{RPU}')
 if not os.path.exists(outfolder):
     os.makedirs(outfolder,exist_ok=True)
 
-# Get duration and return period of interest
-# (these values are passed by the user as command-line arguments)
-duration = int(sys.argv[1])
-return_period = float(sys.argv[2])
+# Get bounding box of study area
+RPU_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/raster_processing/CONUS_raster_processing_units'
+study_area = gpd.read_file(RPU_path)
+study_area = study_area[study_area['UnitID']==RPU].to_crs('EPSG:5070')
+study_area['geometry'] = study_area['geometry'].buffer(10000) # Add 10 km buffer to be safe
+study_area = study_area.to_crs('EPSG:4326')
+bbox = tuple(study_area.total_bounds)
 
-print(f'Calculating average {duration}-hour precipitation intensity with return period of {return_period:.1f} years.',flush=True)
+print(f'Creating timeseries of annual max {duration}-hour precipitation intensity.',flush=True)
 
 # Path to NOAA Analysis of Record for Calibration (AORC) data
 # Available at: https://registry.opendata.aws/noaa-nws-aorc/
 AORC_dir = '/proj/characklab/projects/kieranf/flood_damage_index/data/AORC/'
 
 # Extract timeseries of annual maximum precipitation intensity
-annual_maxima = AORC_annual_max_precip_intensity(AORC_dir,duration=duration)
+annual_maxima = AORC_annual_max_precip_intensity(AORC_dir,duration=duration,bbox=bbox)
 
 # Assemble into local memory 
 annual_maxima = annual_maxima.compute()
+
+print(f'Estimating {duration}-hour precipitation intensity with return period of {return_period:.1f} years.',flush=True)
 
 # Calculate precipitation intensity associated with return period of interest
 rp_intensity = xr.apply_ufunc(extreme_value_analysis,
                               annual_maxima,
                               kwargs={'return_period':return_period},
-                              input_core_dims=[['year']], vectorize=True)
+                              input_core_dims=[['year']], 
+                              vectorize=True)
 
 ### *** EXPORT RESULTS *** ###
 
@@ -146,7 +163,7 @@ if rp_intensity.y[0] < rp_intensity.y[-1]:
 rp_intensity = rp_intensity.rio.write_crs('EPSG:4326')
 
 # Save to file
-outname = os.path.join(outfolder,f'MAI{duration}_RP{return_period:.1f}y_mm_per_hr.tif')
+outname = os.path.join(outfolder,f'{RPU}_MAI{duration}_RP{return_period:.1f}y_mm_per_hr.tif')
 rp_intensity.rio.to_raster(outname)
 
 print('Saved output to:',outname,flush=True)
