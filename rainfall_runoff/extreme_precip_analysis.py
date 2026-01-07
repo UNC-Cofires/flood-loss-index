@@ -51,7 +51,7 @@ def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_ye
     # Specify chunksize that xarray should use.
     # Since we are calculating annual maxima, we should chunk things 
     # up spatially and leave the time dimension intact. 
-    chunks={'latitude':50,'longitude':50,'time':-1}
+    chunks={'latitude':25,'longitude':25,'time':-1}
     
     # Read in AORC data from each year
     annual_maxima_list = []
@@ -109,7 +109,7 @@ def extreme_value_analysis(annual_maxima,return_period=2.0,c_guess=0.0):
 pwd = os.getcwd()
 
 # Get values of command-line arguments 
-RPU = sys.argv[1]                      # Raster processing unit of interest
+RPU = sys.argv[1]
 duration = int(sys.argv[2])            # Duration of interest [hours]
 return_period = float(sys.argv[3])     # Return period of interest [years]
 
@@ -143,28 +143,19 @@ rp_intensity = xr.apply_ufunc(extreme_value_analysis,
                               kwargs={'return_period':return_period},
                               input_core_dims=[['year']],
                               dask='parallelized',
-                              vectorize=True)
-
-# Assemble final result into local memory
-rp_intensity = rp_intensity.compute()
+                              vectorize=True,
+                              output_dtypes=[np.float32])
 
 ### *** EXPORT RESULTS *** ###
 
-# Cast as float32 to save memory
-rp_intensity = rp_intensity.astype('float32')
-
 # Rename lon/lat to x/y since this is what rasterio expects
 rp_intensity = rp_intensity.rename({'longitude': 'x', 'latitude': 'y'})
-
-# Sort rows of raster so that they are oriented north-to-south
-if rp_intensity.y[0] < rp_intensity.y[-1]:
-    rp_intensity = rp_intensity.sortby('y', ascending=False)
 
 # Specify CRS
 rp_intensity = rp_intensity.rio.write_crs('EPSG:4326')
 
 # Save to file
 outname = os.path.join(outfolder,f'{RPU}_MAI{duration}_RP{return_period:.1f}y_mm_per_hr.tif')
-rp_intensity.rio.to_raster(outname)
+rp_intensity.rio.to_raster(outname,tiled=True,windowed=True,compress='deflate')
 
 print('Saved output to:',outname,flush=True)
