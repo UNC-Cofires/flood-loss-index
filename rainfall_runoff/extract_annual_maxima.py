@@ -9,7 +9,7 @@ import os
 
 ### *** HELPER FUNCTIONS *** ###
 
-def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_year=2024,bbox=None):
+def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_year=2024,bbox=None,):
     """
     This function calculates the annual maximum precipitation intensity [mm/hr] for a given 
     duration (e.g., 24 hours) based on NOAA's Analysis of Record for Calibration (AORC) dataset. 
@@ -30,12 +30,19 @@ def AORC_annual_max_precip_intensity(AORC_dir,duration=24,start_year=1979,end_ye
     # Build file list
     filepaths = [os.path.join(AORC_dir, f"{year}.zarr") for year in np.arange(start_year, end_year + 1)]
 
-    # Specify chunksize that xarray should use.
-    # Time chunksize should be larger than duration of interest.
+    # Native AORC chunk size for lat, lon and time is 128, 256 and 144 respectively. 
+    # Keep native chunk size of spatial dimensions, but make time longer since the user 
+    # may want to aggregate precip over a rolling window that is longer than 144 hours. 
+    # Time chunk size of 720 will be efficient for rolling windows of up to 30 days. 
     chunks={'latitude':128,'longitude':256,'time':720}
 
     # Open files as an xarray dataset but don't read them into memory yet
-    gridded_data = xr.open_mfdataset(filepaths,engine="zarr",concat_dim="time",combine="nested",chunks=chunks)
+    gridded_data = xr.open_mfdataset(filepaths,
+                                     engine='zarr',
+                                     combine='by_coords',
+                                     chunks=chunks,
+                                     data_vars=['APCP_surface'],
+                                     coords='minimal')
 
     # Subset to region of interest
     if bbox is not None:
@@ -76,35 +83,46 @@ outname = os.path.join(outfolder,f'AORC_annual_max_{duration}hr_precip_intensity
 
 ### *** GET PROPERTIES OF AORC GRID *** ###
 
+# Specify the size of spatial chunks to be processed by each job in the array 
+
+lat_chunksize = 128*5
+lon_chunksize = 256*5
+
+# Get parameters of AORC grid
 AORC_template = xr.open_zarr(os.path.join(AORC_dir,'1979.zarr'))
 AORC_lats = AORC_template['latitude'].to_numpy()
 AORC_lons = AORC_template['longitude'].to_numpy()
 years = np.arange(1979,2024+1)
 
-# Create zarr store for output if it doesn't already exist
+# Create zarr store for output if it's the first job in the SLURM array. 
+# Note that when setting up the job on HPC, users should first launch task 0, 
+# let it run for a bit so that the zarr store is created, and only then submit 
+# the rest of the array. Otherwise we can end up with a race condition that will
+# throw an error. 
 
-if not os.path.exists(outname):
+if task_id == 0:
     template_arr = np.empty((len(AORC_lats),len(AORC_lons),len(years)),dtype='float32')
     coords = {'latitude':AORC_lats,'longitude':AORC_lons,'year':years}
-    chunks = {'latitude':128,'longitude':256,'year':-1}
+    chunks = {'latitude':lat_chunksize,'longitude':lon_chunksize,'year':-1}
     template_data = xr.DataArray(template_arr,coords,name='APCP_surface').chunk(chunks)
-    template_data.to_zarr(outname,mode="w",zarr_version=2,consolidated=True)
+    template_data.to_zarr(outname,mode="w",zarr_version=2,consolidated=False)
 
-# Figure out what region this particular SLURM job should focus on 
-
-lat_chunksize = 128*5
-lon_chunksize = 256*5
+# Determine which spatial chunk this specific job corresponds to 
 num_lat_chunks = np.ceil(len(AORC_lats)/lat_chunksize).astype(int)
 num_lon_chunks = np.ceil(len(AORC_lons)/lon_chunksize).astype(int)
 num_chunks = num_lat_chunks*num_lon_chunks
 lat_chunk = task_id // num_lon_chunks
 lon_chunk = task_id % num_lon_chunks
 
-lat_idx = lat_chunk*lat_chunksize
-lon_idx = lon_chunk*lon_chunksize
+# Get indices and bounding box of this region in the AORC grid
+lat_start_idx = lat_chunk*lat_chunksize
+lon_start_idx = lon_chunk*lon_chunksize
 
-lat_slice = slice(lat_idx,lat_idx+lat_chunksize)
-lon_slice = slice(lon_idx,lon_idx+lon_chunksize)
+lat_stop_idx = min(lat_start_idx+lat_chunksize,len(AORC_lats))
+lon_stop_idx = min(lon_start_idx+lon_chunksize,len(AORC_lons))
+
+lat_slice = slice(lat_start_idx,lat_stop_idx)
+lon_slice = slice(lon_start_idx,lon_stop_idx)
 
 min_lon = AORC_lons[lon_slice].min()
 min_lat = AORC_lats[lat_slice].min()
@@ -114,9 +132,6 @@ max_lat = AORC_lats[lat_slice].max()
 # Get bbox for geographic filtering of data
 bbox = (min_lon,min_lat,max_lon,max_lat)
 bbox_str = '(' + ','.join([f'{x:.4f}' for x in bbox]) + ')'
-
-# Get indices of output zarr that this corresponds to
-region = {'latitude':lat_slice,'longitude':lon_slice,'year':slice(None)}
 
 print(f'\nFocusing on AORC domain chunk {task_id + 1} / {num_chunks}: {bbox_str}',flush=True)
 
@@ -132,14 +147,22 @@ with ProgressBar(dt=10):
 
 ### *** SAVE RESULTS *** ###
 
-print(f'\nRechunking to ensure zarr compatibility.',flush=True)
+print(f'\nRechunking to align with output zarr.',flush=True)
 
 with ProgressBar(dt=10):
-    annual_maxima = annual_maxima.chunk({'latitude':128,'longitude':256,'year':-1})
+
+    # This method of rechunking should be edge-safe 
+    chunks = {'latitude':lat_stop_idx-lat_start_idx,
+              'longitude':lon_stop_idx-lon_start_idx,
+              'year':-1}
+    
+    annual_maxima = annual_maxima.chunk(chunks)
 
 print(f'\nWriting output to {outname}',flush=True)
 
 with ProgressBar(dt=10):
+    
+    region = {'latitude':lat_slice,'longitude':lon_slice,'year':slice(None)}
     annual_maxima.to_zarr(outname,zarr_version=2,region=region,mode='r+',consolidated=False)
 
 print(f'\nTask complete.',flush=True)
