@@ -2,6 +2,22 @@ import numpy as np
 import pandas as pd
 import os
 
+### *** HELPER FUNCTIONS *** ###
+
+def format_latlon_coords(lats,lons):
+    """
+    This function creates a series of rounded (lat,lon) coordinate strings from a series 
+    of numerical latitude and longitude values. Coordinates are rounded to one decimal degree. 
+
+    param: latitude values [pandas series of floats]. 
+    param: lons: longitude values [pandas series of floats]. 
+    returns: coords: coordinate strings rounded to the nearest 0.1 degree [pandas series of strings]. 
+    """
+    lats = lats.apply(lambda x: f'{x:0.1f}')
+    lons = lons.apply(lambda x: f'{x:0.1f}')
+    coords = '(' + lats + ',' + lons + ')'
+    return coords
+
 ### *** INITIAL SETUP *** ###
 
 pwd = os.getcwd()
@@ -18,24 +34,28 @@ event_catalog = pd.read_csv(event_catalog_path)
 event_catalog['START_DATE'] = pd.to_datetime(event_catalog['START_DATE'])
 event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE'])
 
-## Counties included in study area
-included_GEOIDs_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/included_county_GEOIDs.txt'
-included_GEOIDs = np.loadtxt(included_GEOIDs_path,dtype=str)
+## Latitude/Longitude coordinates included in study area
+included_gridcells_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/included_latlon_gridcells.txt'
+included_gridcells = np.loadtxt(included_gridcells_path,dtype=str)
 
 ## OpenFEMA NFIP records
 
-# Filter by study area counties
-filters = [('countyCode','in',included_GEOIDs)]
-
 # Claims
 claims_path = '/proj/characklab/projects/kieranf/OpenFEMA/FimaNfipClaims.parquet'
-usecols = ['id','countyCode','dateOfLoss']
-claims = pd.read_parquet(claims_path,columns=usecols,filters=filters).rename(columns={'id':'openfema_claim_id'})
+usecols = ['id','latitude','longitude','dateOfLoss']
+claims = pd.read_parquet(claims_path,columns=usecols).rename(columns={'id':'openfema_claim_id'})
+claims['latlon_gridcell'] = format_latlon_coords(claims['latitude'],claims['longitude'])
 
 # Policies
 policies_path = '/proj/characklab/projects/kieranf/OpenFEMA/FimaNfipPolicies.parquet'
-usecols = ['id','countyCode','policyEffectiveDate','policyTerminationDate']
-policies = pd.read_parquet(policies_path,columns=usecols,filters=filters).rename(columns={'id':'openfema_policy_id'})
+usecols = ['id','latitude','longitude','policyEffectiveDate','policyTerminationDate']
+policies = pd.read_parquet(policies_path,columns=usecols).rename(columns={'id':'openfema_policy_id'})
+
+# Filter by latitude/longitude gridcell
+claims['latlon_gridcell'] = format_latlon_coords(claims['latitude'],claims['longitude'])
+policies['latlon_gridcell'] = format_latlon_coords(policies['latitude'],policies['longitude'])
+claims = claims[claims['latlon_gridcell'].isin(included_gridcells)].reset_index(drop=True)
+policies = policies[policies['latlon_gridcell'].isin(included_gridcells)].reset_index(drop=True)
 
 ## Potential building candidates for NFIP records
 claim_match_info_path = os.path.join(pwd,'potential_matches/CONUS_nfip_matching_claim_info.parquet')
@@ -47,10 +67,12 @@ building_lookup = pd.read_parquet(building_lookup_path)
 
 ### *** DETERMINE NUMBER OF PRESENCE-ABESNCE POINTS BY EVENT *** ###
 
-# Drop claim and policy records that did not match to any builings
-# (extremely tiny number, likely due to errors in OpenFEMA's geolocation process) 
-valid_claim_ids = claim_match_info[claim_match_info['num_matches']>=1]['openfema_claim_id'].to_numpy()
-valid_policy_ids = policy_match_info[policy_match_info['num_matches']>=1]['openfema_policy_id'].to_numpy()
+# Drop claim and policy records that did not match to any buildings with desired precision.
+# (extremely tiny number, likely due to errors in OpenFEMA's geolocation process). 
+min_match_precision = 4
+
+valid_claim_ids = claim_match_info[claim_match_info['match_precision']>=min_match_precision]['openfema_claim_id'].to_numpy()
+valid_policy_ids = policy_match_info[policy_match_info['match_precision']>=min_match_precision]['openfema_policy_id'].to_numpy()
 claims = claims[claims['openfema_claim_id'].isin(valid_claim_ids)]
 policies = policies[policies['openfema_policy_id'].isin(valid_policy_ids)]
 
@@ -58,16 +80,18 @@ policies = policies[policies['openfema_policy_id'].isin(valid_policy_ids)]
 claims = pd.merge(claims,claim_match_info[['openfema_claim_id','match_key','num_matches']],on='openfema_claim_id',how='left')
 policies = pd.merge(policies,policy_match_info[['openfema_policy_id','match_key','num_matches']],on='openfema_policy_id',how='left')
 
-## First deal with post-2009 events
-# (These are simpler since we have reliable policy data in OpenFEMA)
-# (Can add earlier events later) 
-
-post_2009_mask = (event_catalog['SEASON'] > 2009)
-post_2009_event_numbers = event_catalog[post_2009_mask]['EVENT_NUMBER'].to_list()
-
 group_counts_list = []
 
-for event_number in post_2009_event_numbers:
+included_event_numbers = event_catalog['EVENT_NUMBER'].unique()
+
+# Specify the earliest date at which OpenFEMA records reflect the full 
+# policy base in force (should be 2010). For pre-2010 events, we'll assume 
+# the number of policies in force is equal to the number in force on this date. 
+
+OpenFEMA_policybase_date = pd.Timestamp('2010-01-01',tz='UTC')
+
+for event_number in included_event_numbers:
+    
     event_info = event_catalog[event_catalog['EVENT_NUMBER']==event_number].iloc[0]
     start_date = event_info['START_DATE']
     end_date = event_info['END_DATE']
@@ -79,7 +103,12 @@ for event_number in post_2009_event_numbers:
     # Get policies that were in force during middle of event
     # (we'll use this timepoint to assess coverage)
     mid_date = start_date + (end_date-start_date)/2
-    policy_filter = (policies['policyEffectiveDate'] <= mid_date)&(policies['policyTerminationDate'] >= mid_date)
+
+    if mid_date >= OpenFEMA_policybase_date:
+        policy_filter = (policies['policyEffectiveDate'] <= mid_date)&(policies['policyTerminationDate'] >= mid_date)
+    else:
+        policy_filter = (policies['policyEffectiveDate'] <= OpenFEMA_policybase_date)&(policies['policyTerminationDate'] >= OpenFEMA_policybase_date)
+    
     event_policies = policies[policy_filter]
 
     event_claims['count'] = 1
