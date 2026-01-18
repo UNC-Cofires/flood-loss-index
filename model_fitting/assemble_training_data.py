@@ -130,7 +130,7 @@ precip_filepath = '/proj/characklab/projects/kieranf/flood_damage_index/analysis
 filters = [('EVENT_NUMBER','=',event_number)]
 precip_data = dd.read_parquet(precip_filepath,filters=filters).rename(columns={'comid':'nhd_catchment_comid'})
 
-precip_features = ['C0_area_sqkm','C0_API120_mm','C24_MAI24_mmhr']
+precip_features = ['C0_area_sqkm','C0_API120_mm','C0_MAI24_mmhr']
 
 precip_data = precip_data[['EVENT_NUMBER','nhd_catchment_comid']+precip_features]
 precip_data = downcast_floats(precip_data)
