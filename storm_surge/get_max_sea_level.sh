@@ -14,4 +14,4 @@ module load anaconda
 export PYTHONWARNINGS="ignore"
 
 conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
-python3.12 get_peak_over_threshold.py
+python3.12 get_max_sea_level.py

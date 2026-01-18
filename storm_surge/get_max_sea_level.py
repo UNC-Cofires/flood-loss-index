@@ -52,14 +52,8 @@ shoreline_nodes = shoreline_nodes[m].reset_index(drop=True)
 # Start list of nodes that we'll exclude due to missing data
 nodes_to_drop = shoreline_nodes[~m]['nodenum'].to_list()
 
-# Get the 95th percentile of daily water levels
-p95 = daily_max_zeta.quantile(0.95)
-
-# Get daily elevation above threshold 
-zeta_over_threshold = daily_max_zeta - p95
-
 # Get max elevation over threshold for each event
-zmax_by_event = pd.concat([get_zmax_by_event(zeta_over_threshold,event_info) for i,event_info in event_catalog.iterrows()])
+zmax_by_event = pd.concat([get_zmax_by_event(daily_max_zeta,event_info) for i,event_info in event_catalog.iterrows()])
 
 # Get list of nodes with missing data
 nodes_to_drop += list(set(zmax_by_event[zmax_by_event['zmax'].isna()]['nodenum'].unique()))
@@ -71,9 +65,15 @@ shoreline_nodes = shoreline_nodes[~shoreline_nodes['nodenum'].isin(nodes_to_drop
 
 print(f'Dropped {len(nodes_to_drop)} / {num_nodes} nodes with missing data.',flush=True)
 
-# Save results
+# Get the 95th percentile of daily water levels
 
-zmax_by_event.rename(columns={'zmax':'max_zeta_over_threshold'},inplace=True)
+p95 = daily_max_zeta.quantile(0.95)
+p95 = pd.DataFrame(p95).reset_index()
+p95.columns=['nodenum','P95_daily_zmax']
+
+zmax_by_event = pd.merge(zmax_by_event,p95,on='nodenum',how='left')
+
+# Save results
 
 outfolder = os.path.join(pwd,'CORA_max_zeta_by_event')
 
