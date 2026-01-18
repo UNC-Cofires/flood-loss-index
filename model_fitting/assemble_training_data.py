@@ -62,10 +62,14 @@ def extract_latlon_from_match_key(match_key):
 # Get current working directory 
 pwd = os.getcwd()
 
-# Create output folder
-outfolder = os.path.join(pwd,'training_data')
-if not os.path.exists(outfolder):
-    os.makedirs(outfolder,exist_ok=True)
+# Create output folders
+disagg_outfolder = os.path.join(pwd,'training_data/disaggregated')
+if not os.path.exists(disagg_outfolder):
+    os.makedirs(disagg_outfolder,exist_ok=True)
+
+agg_outfolder = os.path.join(pwd,'training_data/aggregated')
+if not os.path.exists(agg_outfolder):
+    os.makedirs(agg_outfolder,exist_ok=True)
 
 # Get event information
 event_number = int(os.environ['SLURM_ARRAY_TASK_ID'])
@@ -126,7 +130,7 @@ precip_filepath = '/proj/characklab/projects/kieranf/flood_damage_index/analysis
 filters = [('EVENT_NUMBER','=',event_number)]
 precip_data = dd.read_parquet(precip_filepath,filters=filters).rename(columns={'comid':'nhd_catchment_comid'})
 
-precip_features = [x for x in list(precip_data.columns) if x not in ['EVENT_NUMBER','nhd_catchment_comid']]
+precip_features = ['C0_area_sqkm','C0_API120_mm','C24_MAI24_mmhr']
 
 precip_data = precip_data[['EVENT_NUMBER','nhd_catchment_comid']+precip_features]
 precip_data = downcast_floats(precip_data)
@@ -138,7 +142,7 @@ storm_surge_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysi
 filters = [('EVENT_NUMBER','=',event_number)]
 storm_surge_data = dd.read_parquet(storm_surge_path,filters=filters).rename(columns={'nodenum':'cora_shoreline_node'})
 
-storm_surge_features = ['max_zeta_over_threshold']
+storm_surge_features = ['zmax','P95_daily_zmax']
 
 storm_surge_data = storm_surge_data[['EVENT_NUMBER','cora_shoreline_node']+storm_surge_features]
 storm_surge_data = downcast_floats(storm_surge_data)
@@ -158,12 +162,18 @@ presence_absence_data = dd.merge(presence_absence_data,precip_data,on=['EVENT_NU
 # Attach data on storm surge conditions (dynamic) 
 presence_absence_data = dd.merge(presence_absence_data,storm_surge_data,on=['EVENT_NUMBER','cora_shoreline_node'],how='left')
 
+# Assemble dataset into local memory as a pandas dataframe
+print('Assembling data into local memory.',flush=True)
+with ProgressBar(dt=1):
+    presence_absence_data = presence_absence_data.compute()
+
 ### *** CALCULATE AVERAGE VALUE OF FEATURES WITHIN GROUPS *** ###
 
 # Get list of features to use in model
 features = topo_features + precip_features + storm_surge_features 
 
 agg_cols = ['EVENT_NUMBER','match_key']
+
 agg_dict = {'SPATIAL_BLOCK_ID':'first',
             'num_claims':'first',
             'num_policies':'first',
@@ -176,21 +186,22 @@ agg_dict = {'SPATIAL_BLOCK_ID':'first',
 for feature in features:
     agg_dict[feature] = 'mean'
 
-presence_absence_data = presence_absence_data.groupby(agg_cols).agg(agg_dict).reset_index()
+agg_data = presence_absence_data.groupby(agg_cols).agg(agg_dict).reset_index()
+
+### *** SAVE RESULTS *** ###
 
 # Downcast to float32 to save space
 presence_absence_data = downcast_floats(presence_absence_data)
 presence_absence_data = harmonize_dtypes(presence_absence_data)
-
-# Assemble dataset into local memory as a pandas dataframe
-print('Assembling data into local memory.',flush=True)
-with ProgressBar(dt=1):
-    presence_absence_data = presence_absence_data.compute()
-
-### *** SAVE RESULTS *** ###
+agg_data = downcast_floats(agg_data)
+agg_data = harmonize_dtypes(agg_data)
 
 # Save to parquet file
-outname = os.path.join(outfolder,f'event_{event_number:04d}_training_data.parquet')
-presence_absence_data.to_parquet(outname)
+disagg_outname = os.path.join(disagg_outfolder,f'event_{event_number:04d}_disaggregated_training_data.parquet')
+presence_absence_data.to_parquet(disagg_outname)
 
-print(f'Saved output to {outname}',flush=True)
+agg_outname = os.path.join(agg_outfolder,f'event_{event_number:04d}_aggregated_training_data.parquet')
+agg_data.to_parquet(agg_outname)
+
+print(f'Saved output to {disagg_outname}\n',flush=True)
+print(f'Saved output to {agg_outname}\n',flush=True)
