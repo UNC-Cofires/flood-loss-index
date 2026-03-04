@@ -115,22 +115,22 @@ print(event_info,flush=True)
 precip_dir = os.path.join(pwd,'aggregated_precip')
 RPU_list = ['03a','03b','03c','03d','03e','03f','03g'] #np.sort(os.listdir(precip_dir)) # (!) Later expand to rest of CONUS
 buffer = pd.Timedelta(7,'days')
-yearmonth_list = pd.date_range(start_date-buffer,end_date+buffer).strftime('%Y-%m').unique()
+year_list = pd.date_range(start_date-buffer,end_date+buffer).strftime('%Y').unique()
 
-yearmonth_precip_list = []
+year_precip_list = []
 
-for yearmonth in yearmonth_list:
+for year in year_list:
     
     RPU_precip_filepaths = []
     
     for RPU in RPU_list:
-        path = os.path.join(precip_dir,RPU,f'AORC_by_yearmonth/{RPU}_{yearmonth}_AORC_precip_by_COMID.parquet')
+        path = os.path.join(precip_dir,RPU,f'AORC_by_COMID/{RPU}_{year}_AORC_precip_by_COMID.parquet')
         RPU_precip_filepaths.append(path)
 
-    yearmonth_precip = pd.concat([pd.read_parquet(filepath) for filepath in RPU_precip_filepaths],axis=1)
-    yearmonth_precip_list.append(yearmonth_precip)
+    year_precip = pd.concat([pd.read_parquet(filepath) for filepath in RPU_precip_filepaths],axis=1)
+    year_precip_list.append(year_precip)
     
-precip = pd.concat(yearmonth_precip_list,axis=0)
+precip = pd.concat(year_precip_list,axis=0)
 
 # Drop rows outside date range of interest
 m = (precip.index >= np.datetime64(start_date-buffer))&(precip.index <= np.datetime64(end_date+buffer))
@@ -144,8 +144,8 @@ precip = precip.loc[:,~precip.columns.duplicated()].copy()
 precip.columns = precip.columns.astype(int)
 
 # Free up memory
-del yearmonth_precip_list
-del yearmonth_precip
+del year_precip_list
+del year_precip
 gc.collect()
 
 ## NHD flow network
