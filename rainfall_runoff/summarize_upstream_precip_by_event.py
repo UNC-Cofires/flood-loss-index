@@ -33,10 +33,10 @@ def summarize_precip(source_comid,G,catchment_area,precip,start_date,end_date,ne
     """
 
     # Flow wave travel times used to define "n-hour catchments" [hours]
-    travel_time_intervals = [0,24,48,72]
+    travel_time_intervals = [0] #[0,24,48,72]
 
     # Durations used to evaluate maximum precipitation intensity [hours]
-    precip_duration_intervals = [3,6,12,24,48,72]
+    precip_duration_intervals = [6,12,24] #[3,6,12,24,48]
 
     # How far back to look when evaluating antecedent precipitation [hours]
     API_lookback_period = 120
@@ -97,7 +97,7 @@ if not os.path.exists(outfolder):
     os.makedirs(outfolder,exist_ok=True)
 
 # Get event information
-event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/historical_TC_event_info.csv'
+event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/southeast_selected_TC_clusters.csv'
 event_catalog = pd.read_csv(event_catalog_path)
 event_catalog['START_DATE'] = pd.to_datetime(event_catalog['START_DATE'])
 event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE'])
@@ -113,7 +113,7 @@ print(event_info,flush=True)
 ## AORC precipitation (aggregated by NHD catchment)
 
 precip_dir = os.path.join(pwd,'aggregated_precip')
-RPU_list = np.sort(os.listdir(precip_dir))
+RPU_list = ['03a','03b','03c','03d','03e','03f','03g'] #np.sort(os.listdir(precip_dir)) # (!) Later expand to rest of CONUS
 buffer = pd.Timedelta(7,'days')
 yearmonth_list = pd.date_range(start_date-buffer,end_date+buffer).strftime('%Y-%m').unique()
 
@@ -166,5 +166,5 @@ event_precip_summary = pd.DataFrame([summarize_precip(comid,G,catchment_area,pre
 
 ### *** SAVE RESULTS *** ###
 
-outname = os.path.join(outfolder,f'event_{event_number:04d}_precip_summary.parquet')
+outname = os.path.join(outfolder,f'event_{event_number:04d}_upstream_precip_summary.parquet')
 event_precip_summary.to_parquet(outname)
