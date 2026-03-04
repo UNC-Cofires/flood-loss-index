@@ -26,11 +26,11 @@ pwd = os.getcwd()
 
 # Read in data on historical TC events
 # (Exclude those from after 2022 since that's when the CORA data stops)
-event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/historical_TC_event_info.csv'
+event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/southeast_selected_TC_clusters.csv'
 event_catalog = pd.read_csv(event_catalog_path)
 event_catalog['START_DATE'] = pd.to_datetime(event_catalog['START_DATE']).dt.tz_localize(None)
 event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE']).dt.tz_localize(None)
-event_catalog = event_catalog[event_catalog['SEASON'] <= 2022]
+event_catalog = event_catalog[event_catalog['START_DATE'].dt.year <= 2022]
 
 # Read in data on daily max water levels during 1979-2022 period
 daily_max_zeta_path = os.path.join(pwd,'CORA_extract/daily_max_zeta_at_shoreline_nodes.parquet')
