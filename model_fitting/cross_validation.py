@@ -58,7 +58,7 @@ class FloodDamageRegressor:
         self.hyperparams = hyperparams
         self.model = None
 
-    def fit(self,data,num_calibration_folds=5,min_delta=1e-6,t0=None):
+    def fit(self,data,num_calibration_folds=5,min_delta=1e-5,t0=None):
         """
         This function fits an LGBMRegressor model to the data while using an inner
         cross-validation loop to calibrate claim intensity projections. 
@@ -176,7 +176,7 @@ n_cores = int(os.environ['SLURM_NTASKS'])
 validation_event_number = int(os.environ['SLURM_ARRAY_TASK_ID'])
 
 # Get list of events to use for training (making sure to exclude those used for validation) 
-training_event_numbers = np.arange(1,100+1)
+training_event_numbers = np.arange(1,41+1)
 training_event_numbers = training_event_numbers[training_event_numbers != validation_event_number]
 included_event_numbers = np.concatenate((training_event_numbers,[validation_event_number]))
 
@@ -186,7 +186,7 @@ if not os.path.exists(outfolder):
     os.makedirs(outfolder,exist_ok=True)
 
 # Get event information
-event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/historical_TC_event_info.csv'
+event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/southeast_selected_TC_clusters.csv'
 event_catalog = pd.read_csv(event_catalog_path)
 event_catalog['START_DATE'] = pd.to_datetime(event_catalog['START_DATE'])
 event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE'])
@@ -199,8 +199,8 @@ print(validation_event_info,flush=True)
 
 ### *** LOAD DATA *** ###
 
-data_dir = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/model_fitting/training_data'
-filepaths = [os.path.join(data_dir,f'event_{event_number:04d}_training_data.parquet') for event_number in included_event_numbers]
+data_dir = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/model_fitting/training_data/aggregated'
+filepaths = [os.path.join(data_dir,f'event_{event_number:04d}_aggregated_training_data.parquet') for event_number in included_event_numbers]
 df = pd.read_parquet(filepaths)
 
 ## Get list of features to use in model
@@ -212,13 +212,11 @@ topo_features = ['dist_coast_m',
                  'hand_wb_cm']
 
 # Precipitation-related variables
-precip_features = ['C72_area_sqkm',
-                   'C72_API120_mm',
-                   'C72_MAI24_mmhr',
+precip_features = ['C0_API120_mm',
                    'C0_MAI24_mmhr']
 
 # Storm surge related variables
-surge_features = ['max_zeta_over_threshold']
+surge_features = ['zmax','P95_daily_zmax']
 
 # Combine different groups of predictors into one list
 features = topo_features + precip_features + surge_features

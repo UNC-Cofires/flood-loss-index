@@ -73,7 +73,7 @@ if not os.path.exists(agg_outfolder):
 
 # Get event information
 event_number = int(os.environ['SLURM_ARRAY_TASK_ID'])
-event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/historical_TC_event_info.csv'
+event_catalog_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/event_delineation/southeast_selected_TC_clusters.csv'
 event_catalog = pd.read_csv(event_catalog_path)
 event_catalog['START_DATE'] = pd.to_datetime(event_catalog['START_DATE'])
 event_catalog['END_DATE'] = pd.to_datetime(event_catalog['END_DATE'])
@@ -161,6 +161,14 @@ presence_absence_data = dd.merge(presence_absence_data,precip_data,on=['EVENT_NU
 
 # Attach data on storm surge conditions (dynamic) 
 presence_absence_data = dd.merge(presence_absence_data,storm_surge_data,on=['EVENT_NUMBER','cora_shoreline_node'],how='left')
+
+# Calculate elevation difference between storm surge and building elevation / 95th percentile of daily max water levels
+presence_absence_data['diff_zmax_elev'] = presence_absence_data['zmax'] - presence_absence_data['elev_cm']/100
+presence_absence_data['diff_zmax_P95'] = presence_absence_data['zmax'] - presence_absence_data['P95_daily_zmax']
+presence_absence_data['ratio_zmax_P95'] = presence_absence_data['zmax']/presence_absence_data['P95_daily_zmax']
+
+
+storm_surge_features += ['diff_zmax_elev','diff_zmax_P95','ratio_zmax_P95']
 
 # Assemble dataset into local memory as a pandas dataframe
 print('Assembling data into local memory.',flush=True)
