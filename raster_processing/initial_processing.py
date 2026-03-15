@@ -87,7 +87,7 @@ RPU=sys.argv[1]
 
 # Specify path to RPU shapefile
 pwd = os.getcwd()
-RPU_path = '/proj/characklab/projects/kieranf/flood_damage_index/analysis/raster_processing/CONUS_raster_processing_units'
+RPU_path = '/proj/characklab/projects/kieranf/flood_damage_index/data/watersheds/CONUS_RPU_GEC_cleaned'
 
 # Create output folder if it doesn't already exist 
 outfolder = f'/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/{RPU}'
@@ -170,6 +170,7 @@ shoreline_nodes = shoreline_nodes[shoreline_nodes['geometry'].intersects(buffere
 ### *** STUDY AREA RASTER *** ###
 
 study_area_raster = rasterize_vector(study_area,out_shape,transform,burn_value=1,fill_value=nodata_value,dtype=raster_dtype)
+buff_raster = rasterize_vector(buffered_study_area,out_shape,transform,burn_value=1,fill_value=nodata_value,dtype=raster_dtype)
 
 study_area_mask = (study_area_raster==1)
 nodata_mask = (study_area_raster==nodata_value)
@@ -190,8 +191,10 @@ waterbodies_raster = 1 - waterbodies_raster
 # Convert to desired data type
 waterbodies_raster = waterbodies_raster.astype(raster_dtype)
 
-# Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
-waterbodies_raster[waterbodies_raster==0] = nodata_value
+# Compute distance to waterbodies
+dist_wb_raster = distance_transform_edt(1-waterbodies_raster,sampling=(dy,dx),return_distances=True)
+dist_wb_raster[np.isnan(dist_wb_raster)] = nodata_value
+dist_wb_raster = dist_wb_raster.astype(raster_dtype)
 
 ### *** WATERBODIES RASTER (STREAM ORDER >= 2) *** ###
 
@@ -203,8 +206,10 @@ waterbodies2_raster = 1 - waterbodies2_raster
 # Convert to desired data type
 waterbodies2_raster = waterbodies2_raster.astype(raster_dtype)
 
-# Set areas that aren't waterbody to nodata (certain GRASS GIS functions require this) 
-waterbodies2_raster[waterbodies2_raster==0] = nodata_value
+# Compute distance to waterbodies
+dist_wb2_raster = distance_transform_edt(1-waterbodies2_raster,sampling=(dy,dx),return_distances=True)
+dist_wb2_raster[np.isnan(dist_wb2_raster)] = nodata_value
+dist_wb2_raster = dist_wb2_raster.astype(raster_dtype)
 
 ### *** NHD CATCHMENTS *** ###
 
@@ -297,8 +302,12 @@ else:
 outname = os.path.join(outfolder,f'{RPU}_study_area.tif')
 write_raster(study_area_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
+# Buffered study area
+outname = os.path.join(outfolder,f'{RPU}_study_area_10km_buffer.tif')
+write_raster(buff_raster,outname,transform,raster_crs,nodata_value=nodata_value)
+
 # Elevation raster
-outname = os.path.join(outfolder,f'{RPU}_elev_cm.tif')
+outname = os.path.join(outfolder,f'{RPU}_nhd_elev_cm.tif')
 write_raster(elev_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # Flow direction raster
@@ -313,16 +322,24 @@ write_raster(fac_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 outname = os.path.join(outfolder,f'{RPU}_wb.tif')
 write_raster(waterbodies_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
-# Waterbodies (Stream Order >= 2)
+# Waterbodies (stream order >= 2)
 outname = os.path.join(outfolder,f'{RPU}_wb2.tif')
 write_raster(waterbodies2_raster,outname,transform,raster_crs,nodata_value=nodata_value)
+
+# Distance to waterbodies
+outname = os.path.join(outfolder,f'{RPU}_eucdist_wb_m.tif')
+write_raster(dist_wb_raster,outname,transform,raster_crs,nodata_value=nodata_value)
+
+# Distance to waterbodies (stream order >= 2)
+outname = os.path.join(outfolder,f'{RPU}_eucdist_wb2_m.tif')
+write_raster(dist_wb_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # NHD Catchments
 outname = os.path.join(outfolder,f'{RPU}_nhd_catchment_comid.tif')
 write_raster(catchments_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # Distance to coast
-outname = os.path.join(outfolder,f'{RPU}_dist_coast_m.tif')
+outname = os.path.join(outfolder,f'{RPU}_eucdist_coast_m.tif')
 write_raster(dist_coast_raster,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # CORA shoreline nodes

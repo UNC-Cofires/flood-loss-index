@@ -4,7 +4,7 @@ RPU=$1
 cd "/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/${RPU}"
 
 # Read in elevation raster and use it to set project region 
-r.in.gdal input="${RPU}_elev_cm.tif" output=elev
+r.in.gdal input="${RPU}_ornl_elev_cm.tif" output=elev
 g.region raster=elev -p
 
 # Convert elevation from cm to m

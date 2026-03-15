@@ -8,7 +8,7 @@
 #SBATCH --mail-type=all
 #SBATCH --job-name=create_rasters
 #SBATCH --mail-user=kieranf@email.unc.edu
-#SBATCH --array=1-59
+#SBATCH --array=4-9
 
 # Determine raster processing unit (RPU) of interest based on task_id
 RPU="$(sed -n ${SLURM_ARRAY_TASK_ID}p /proj/characklab/projects/kieranf/flood_damage_index/analysis/CONUS_RPU_list.txt)"
@@ -18,9 +18,10 @@ module purge
 module load anaconda
 export PYTHONWARNINGS="ignore"
 
-#Initial processing of NHD rasters
+#Initial processing of NHD and ORNL rasters
 conda activate /proj/characklab/projects/kieranf/flood_damage_index/fli-env-v1
 python3.12 initial_processing.py $RPU
+python3.12 resample_ornl_data.py $RPU
 conda deactivate
 
 #Run GRASS GIS script to calculate slope and terrain forms from DEM

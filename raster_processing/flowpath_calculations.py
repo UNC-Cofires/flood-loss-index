@@ -85,8 +85,9 @@ def calculate_hand(study_area,elev,fdr,wb_input,dx,dy,nodata_value,maxiter=1000,
 
     integrand = np.ones(stepsize.shape)
     
-    # Set distance to waterbodies equal to zero on waterbodies
-    wb_input[wb_input==1]=0
+    # Set distance to waterbodies equal to zero on waterbodies and one elsewhere
+    # (Do this because we want the distance equal to zero if you're in the stream)
+    wb_input = 1 - wb_input
     
     # Calculate euclidean distance to waterbodies
     # We do this as a pre-processing step because we often get better results will fewer missing values
@@ -125,24 +126,26 @@ def calculate_hand(study_area,elev,fdr,wb_input,dx,dy,nodata_value,maxiter=1000,
     elev_nearest_stream = sample_nearest(nodata_value,i_nearest_sdt,j_nearest_sdt,elev)
     
     # Set nodata values
-    nodata_mask = (elev_nearest_stream == nodata_value)|(elev == nodata_value)
-
-    hand_raster = elev - elev_nearest_stream
+    nodata_mask = (elev_nearest_stream == nodata_value)|(elev == nodata_value)|(fdr == nodata_value)|(~study_area_mask)
+    
+    hand_raster = np.maximum(elev - elev_nearest_stream,0)
     hand_raster[nodata_mask] = nodata_value
-
     hand_raster = hand_raster.astype(elev.dtype)
+
+    dist_sdt[nodata_mask] = nodata_value
+    dist_sdt = dist_sdt.astype(elev.dtype)
     
     return(dist_sdt,hand_raster)
 
 ### *** LOAD DATA SOURCES *** ###
 
 # Specify raster processing unit (RPU) of interest (passed as command-line argument)
-RPU=sys.argv[1] 
+RPU=sys.argv[1] # Remove once debugged
 outfolder = f'/proj/characklab/projects/kieranf/flood_damage_index/data/rasters/{RPU}'
 
 # Specify path to raster data files
 study_area_path = os.path.join(outfolder,f'{RPU}_study_area.tif')
-elev_path = os.path.join(outfolder,f'{RPU}_elev_cm.tif')
+elev_path = os.path.join(outfolder,f'{RPU}_nhd_elev_cm.tif')
 fdr_path = os.path.join(outfolder,f'{RPU}_fdr.tif')
 wb_path = os.path.join(outfolder,f'{RPU}_wb.tif')
 wb2_path = os.path.join(outfolder,f'{RPU}_wb2.tif')
@@ -173,30 +176,26 @@ with rio.open(wb_path,'r') as src:
 # Waterbodies (stream order >= 2)
 with rio.open(wb2_path,'r') as src:
     wb2 = src.read(1)
-    
+
 ### *** CALCULATE HAND AND STREAM DISTANCE *** ###
 
 # Calculate distance to nearest stream and height above nearest drainage
 # (do this once for all waterbodies, and once for all waterbodies with a stream order >= 2)
-dist_wb,hand_wb = calculate_hand(study_area,elev,fdr,wb,dx,dy,nodata_value,cutoff=90)
-dist_wb2,hand_wb2 = calculate_hand(study_area,elev,fdr,wb2,dx,dy,nodata_value,cutoff=90)
-
-# Convert to Int32 data type
-dist_wb = dist_wb.astype(elev.dtype)
-dist_wb2 = dist_wb2.astype(elev.dtype)
+dist_wb,hand_wb = calculate_hand(study_area,elev,fdr,wb,dx,dy,nodata_value)
+dist_wb2,hand_wb2 = calculate_hand(study_area,elev,fdr,wb2,dx,dy,nodata_value)
 
 ### *** SAVE RESULTS *** ###
 
 # HAND rasters
-outname = os.path.join(outfolder,f'{RPU}_hand_wb_cm.tif')
+outname = os.path.join(outfolder,f'{RPU}_nhd_hand_cm.tif')
 write_raster(hand_wb,outname,transform,raster_crs,nodata_value=nodata_value)
 
-outname = os.path.join(outfolder,f'{RPU}_hand_wb2_cm.tif')
+outname = os.path.join(outfolder,f'{RPU}_nhd_hand2_cm.tif')
 write_raster(hand_wb2,outname,transform,raster_crs,nodata_value=nodata_value)
 
 # Stream distance rasters
-outname = os.path.join(outfolder,f'{RPU}_dist_wb_m.tif')
+outname = os.path.join(outfolder,f'{RPU}_flowdist_wb_m.tif')
 write_raster(dist_wb,outname,transform,raster_crs,nodata_value=nodata_value)
 
-outname = os.path.join(outfolder,f'{RPU}_dist_wb2_m.tif')
+outname = os.path.join(outfolder,f'{RPU}_flowdist_wb2_m.tif')
 write_raster(dist_wb2,outname,transform,raster_crs,nodata_value=nodata_value)
